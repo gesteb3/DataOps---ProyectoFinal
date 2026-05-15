@@ -2,20 +2,21 @@ from fastapi import FastAPI
 import psycopg2
 
 from app.database import engine
-from app.models import Base, Connection, DBMetric, QueryLog
+from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.schemas import ConnectionCreate, QueryLogCreate
 from app.security import encrypt_password
 from app.scheduler import scheduler
 from app.modules.concurrency import router as concurrency_router
-
+from app.modules.backup import router as backup_router
 
 app = FastAPI(
     title="DataOps Control Center",
     version="1.0"
 )
 
+app.include_router(backup_router)
 app.include_router(concurrency_router)
 Base.metadata.create_all(bind=engine)
 scheduler.start()
