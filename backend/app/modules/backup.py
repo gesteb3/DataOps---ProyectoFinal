@@ -2,7 +2,7 @@ import os
 import random
 import hashlib
 import time
-
+import boto3
 from datetime import datetime
 from fastapi import APIRouter
 
@@ -24,6 +24,43 @@ def create_hash(data):
         data.encode()
     ).hexdigest()
 
+def replicate_to_cloud(local_file_path, file_name):
+
+    cloud_provider = os.getenv(
+        "CLOUD_PROVIDER",
+        "SIMULATED"
+    )
+
+    if cloud_provider == "AWS":
+
+        bucket = os.getenv("AWS_BUCKET")
+
+        region = os.getenv(
+            "AWS_REGION",
+            "us-east-2"
+        )
+
+        s3 = boto3.client(
+            "s3",
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            region_name=region
+        )
+
+        s3.upload_file(
+            local_file_path,
+            bucket,
+            file_name
+        )
+
+        return f"https://{bucket}.s3.{region}.amazonaws.com/{file_name}"
+
+    cloud_bucket = os.getenv(
+        "CLOUD_BUCKET",
+        "dataops-backups"
+    )
+
+    return f"https://simulated-storage/{cloud_bucket}/{file_name}"
 
 def simulate_backup(backup_type):
 
@@ -46,12 +83,33 @@ def simulate_backup(backup_type):
     )
 
     restore=f"RP-{datetime.now()}"
+    
+    backup_folder = "backups"
 
-    cloud_provider = os.getenv("CLOUD_PROVIDER", "SIMULATED")
-    cloud_bucket = os.getenv("CLOUD_BUCKET", "dataops-backups")
-    fake_cloud = f"https://{cloud_provider.lower()}-storage/{cloud_bucket}/{file_name}"
-    hash_value=create_hash(file_name)
+    os.makedirs(
+        backup_folder,
+        exist_ok=True
+    )
 
+    local_file_path = os.path.join(
+        backup_folder,
+        file_name
+    )
+
+    with open(local_file_path, "w") as backup_file:
+        backup_file.write(
+            f"Backup type: {backup_type}\n"
+            f"Generated at: {datetime.now()}\n"
+            f"Restore point: {restore}\n"
+        )
+
+    hash_value = create_hash(file_name)
+
+    fake_cloud = replicate_to_cloud(
+        local_file_path,
+        file_name
+    )
+        
     backup=BackupHistory(
     backup_type=backup_type,
     file_name=file_name,

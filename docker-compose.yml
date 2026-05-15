@@ -20,8 +20,13 @@ services:
   api:
     build: ./backend
     container_name: dataops_api
+
+    env_file:
+      - .env
+
     ports:
       - "8000:8000"
+
     depends_on:
       - postgres
       - redis

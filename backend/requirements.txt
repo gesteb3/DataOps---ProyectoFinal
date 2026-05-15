@@ -8,3 +8,4 @@ celery
 apscheduler
 python-dotenv
 cryptography
+boto3
