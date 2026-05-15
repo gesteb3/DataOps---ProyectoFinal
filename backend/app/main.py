@@ -8,6 +8,7 @@ from app.database import SessionLocal
 from app.schemas import ConnectionCreate, QueryLogCreate
 from app.security import encrypt_password
 from app.scheduler import scheduler
+from app.modules.concurrency import router as concurrency_router
 
 
 app = FastAPI(
@@ -15,6 +16,7 @@ app = FastAPI(
     version="1.0"
 )
 
+app.include_router(concurrency_router)
 Base.metadata.create_all(bind=engine)
 scheduler.start()
 
