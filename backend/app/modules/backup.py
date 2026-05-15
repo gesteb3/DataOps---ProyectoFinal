@@ -1,3 +1,4 @@
+import os
 import random
 import hashlib
 import time
@@ -46,8 +47,9 @@ def simulate_backup(backup_type):
 
     restore=f"RP-{datetime.now()}"
 
-    fake_cloud=f"https://cloud-storage/{file_name}"
-
+    cloud_provider = os.getenv("CLOUD_PROVIDER", "SIMULATED")
+    cloud_bucket = os.getenv("CLOUD_BUCKET", "dataops-backups")
+    fake_cloud = f"https://{cloud_provider.lower()}-storage/{cloud_bucket}/{file_name}"
     hash_value=create_hash(file_name)
 
     backup=BackupHistory(
@@ -147,4 +149,16 @@ def restore_backup():
         "actual_rpo_minutes": simulated_rpo,
         "actual_rto_minutes": simulated_rto,
         "sla_compliance": "Sí" if sla_compliance else "No"
-    }   
+    }
+
+
+@router.get("/retention-policy")
+def retention_policy():
+    retention_days = int(os.getenv("BACKUP_RETENTION_DAYS", 7))
+
+    return {
+        "retention_days": retention_days,
+        "policy": f"Backups older than {retention_days} days are eligible for cleanup",
+        "cloud_provider": os.getenv("CLOUD_PROVIDER", "SIMULATED"),
+        "status": "configurable_by_environment_variables"
+    }
