@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: dataops_postgres
+    environment:
+      POSTGRES_USER: dataops
+      POSTGRES_PASSWORD: dataops123
+      POSTGRES_DB: dataops_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: dataops_redis
+    ports:
+      - "6379:6379"
+
+  api:
+    build: ./backend
+    container_name: dataops_api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  postgres_data:
