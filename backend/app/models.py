@@ -41,3 +41,21 @@ class DBMetric(Base):
         DateTime,
         default=datetime.utcnow
     )
+    
+class QueryLog(Base):
+    __tablename__ = "query_log"
+
+    id = Column(Integer, primary_key=True)
+    connection_id = Column(Integer, ForeignKey("connections.id"))
+
+    query_text = Column(String, nullable=False)
+    duration_ms = Column(Integer, nullable=False)
+    rows_returned = Column(Integer, default=0)
+    index_used = Column(String(10), default="NO")
+    execution_plan = Column(String, nullable=True)
+    classification = Column(String(20), nullable=False)
+
+    capture_time = Column(
+        DateTime,
+        default=datetime.utcnow
+    )

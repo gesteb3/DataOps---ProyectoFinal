@@ -2,12 +2,13 @@ from fastapi import FastAPI
 import psycopg2
 
 from app.database import engine
-from app.models import Base, Connection, DBMetric
+from app.models import Base, Connection, DBMetric, QueryLog
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.schemas import ConnectionCreate
+from app.schemas import ConnectionCreate, QueryLogCreate
 from app.security import encrypt_password
 from app.scheduler import scheduler
+
 
 app = FastAPI(
     title="DataOps Control Center",
@@ -16,6 +17,16 @@ app = FastAPI(
 
 Base.metadata.create_all(bind=engine)
 scheduler.start()
+
+def classify_query(duration_ms: int):
+    if duration_ms < 100:
+        return "Fast"
+    elif duration_ms <= 500:
+        return "Medium"
+    elif duration_ms <= 2000:
+        return "Slow"
+    else:
+        return "Critical"
 
 @app.get("/")
 def root():
@@ -130,3 +141,42 @@ def health_summary():
         "latest_disk_usage": latest_metric.disk_usage if latest_metric else None,
         "status": "monitoring_active"
     }
+    
+@app.post("/queries")
+def create_query_log(query: QueryLogCreate):
+
+    db: Session = SessionLocal()
+
+    new_query = QueryLog(
+        connection_id=query.connection_id,
+        query_text=query.query_text,
+        duration_ms=query.duration_ms,
+        rows_returned=query.rows_returned,
+        index_used=query.index_used,
+        execution_plan=query.execution_plan,
+        classification=classify_query(query.duration_ms)
+    )
+
+    db.add(new_query)
+    db.commit()
+    db.refresh(new_query)
+
+    db.close()
+
+    return {
+        "message": "Consulta registrada correctamente",
+        "classification": new_query.classification,
+        "duration_ms": new_query.duration_ms
+    }
+
+
+@app.get("/queries")
+def get_query_logs():
+
+    db: Session = SessionLocal()
+
+    queries = db.query(QueryLog).all()
+
+    db.close()
+
+    return queries
