@@ -2,6 +2,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.database import SessionLocal
 from app.models import DBMetric, Connection
 import random
+from app.modules.backup import full_backup
+from app.modules.replication import simulate_replication
 
 scheduler = BackgroundScheduler()
 
@@ -34,4 +36,10 @@ scheduler.add_job(
     capture_metrics,
     "interval",
     minutes=1
+)
+
+scheduler.add_job(
+    simulate_replication,
+    "interval",
+    seconds=30
 )
