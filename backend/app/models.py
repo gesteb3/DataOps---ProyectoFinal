@@ -96,3 +96,12 @@ class User(Base):
         Boolean,
         default=True
     )
+
+class ReplicationStatus(Base):
+    __tablename__ = "replication_status"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario = Column(String)
+    replication_lag = Column(Integer)
+    status = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)

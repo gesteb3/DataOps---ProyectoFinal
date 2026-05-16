@@ -11,6 +11,7 @@ from app.scheduler import scheduler
 from app.modules.concurrency import router as concurrency_router
 from app.modules.backup import router as backup_router
 from app.jwt_security import create_access_token
+from app.modules.replication import router as replication_router
 
 
 app = FastAPI(
@@ -18,6 +19,9 @@ app = FastAPI(
     version="1.0"
 )
 
+app.include_router(
+    replication_router
+)
 app.include_router(backup_router)
 app.include_router(concurrency_router)
 Base.metadata.create_all(bind=engine)
