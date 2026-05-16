@@ -105,3 +105,25 @@ class ReplicationStatus(Base):
     replication_lag = Column(Integer)
     status = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+class CacheMetric(Base):
+    __tablename__ = "cache_metrics"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    query_key = Column(String)
+
+    cache_status = Column(String)
+
+    response_time_ms = Column(Float)
+
+    ttl_seconds = Column(Integer)
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow
+    )

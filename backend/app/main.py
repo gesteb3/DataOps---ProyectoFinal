@@ -12,6 +12,7 @@ from app.modules.concurrency import router as concurrency_router
 from app.modules.backup import router as backup_router
 from app.jwt_security import create_access_token
 from app.modules.replication import router as replication_router
+from app.modules.cache import router as cache_router
 
 
 app = FastAPI(
@@ -25,6 +26,7 @@ app.include_router(
 app.include_router(backup_router)
 app.include_router(concurrency_router)
 Base.metadata.create_all(bind=engine)
+app.include_router(cache_router)
 scheduler.start()
 
 def classify_query(duration_ms: int):
