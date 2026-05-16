@@ -17,3 +17,8 @@ class QueryLogCreate(BaseModel):
     rows_returned: int = Field(..., ge=0)
     index_used: Literal["YES", "NO"]
     execution_plan: str | None = None
+
+class LoginData(BaseModel):
+    username:str
+    password:str
+    

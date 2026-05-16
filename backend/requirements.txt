@@ -9,3 +9,6 @@ apscheduler
 python-dotenv
 cryptography
 boto3
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart

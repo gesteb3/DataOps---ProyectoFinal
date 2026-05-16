@@ -2,14 +2,16 @@ from fastapi import FastAPI
 import psycopg2
 
 from app.database import engine
-from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory
+from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory, User
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.schemas import ConnectionCreate, QueryLogCreate
+from app.schemas import ConnectionCreate, QueryLogCreate, LoginData
 from app.security import encrypt_password
 from app.scheduler import scheduler
 from app.modules.concurrency import router as concurrency_router
 from app.modules.backup import router as backup_router
+from app.jwt_security import create_access_token
+
 
 app = FastAPI(
     title="DataOps Control Center",
@@ -183,3 +185,46 @@ def get_query_logs():
     db.close()
 
     return queries
+
+@app.post("/login")
+def login(user:LoginData):
+
+    db:Session=SessionLocal()
+
+    existing_user=db.query(
+        User
+    ).filter(
+        User.username==user.username
+    ).first()
+
+    if not existing_user:
+
+        demo_user=User(
+            username="admin",
+            password="admin123"
+        )
+
+        db.add(demo_user)
+        db.commit()
+
+        existing_user=demo_user
+
+    if(
+        existing_user.password
+        !=user.password
+    ):
+
+        return{
+            "error":"Credenciales inválidas"
+        }
+
+    token=create_access_token(
+        {
+            "sub":existing_user.username
+        }
+    )
+
+    return{
+        "access_token":token,
+        "token_type":"bearer"
+    }

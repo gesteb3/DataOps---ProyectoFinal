@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column,Integer,String,Float,DateTime,Boolean
 from datetime import datetime
 from app.database import Base
 from sqlalchemy import ForeignKey, Float
@@ -73,3 +73,26 @@ class BackupHistory(Base):
     cloud_url = Column(String)
     hash_value = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
+    
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    username = Column(
+        String,
+        unique=True
+    )
+
+    password = Column(
+        String
+    )
+
+    is_active = Column(
+        Boolean,
+        default=True
+    )
