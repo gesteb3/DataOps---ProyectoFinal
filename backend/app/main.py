@@ -1,36 +1,68 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 import psycopg2
 
-from app.database import engine
-from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory, User
 from sqlalchemy.orm import Session
+
+from app.database import engine
 from app.database import SessionLocal
+from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory, User
 from app.schemas import ConnectionCreate, QueryLogCreate, LoginData
 from app.security import encrypt_password
 from app.scheduler import scheduler
+
+from app.jwt_security import create_access_token, get_current_user
+
 from app.modules.concurrency import router as concurrency_router
 from app.modules.backup import router as backup_router
-from app.jwt_security import create_access_token
 from app.modules.replication import router as replication_router
 from app.modules.cache import router as cache_router
 from app.modules.bi import router as bi_router
 from app.modules.alerts import router as alerts_router
+
 
 app = FastAPI(
     title="DataOps Control Center",
     version="1.0"
 )
 
-app.include_router(
-    replication_router
-)
-app.include_router(bi_router)
-app.include_router(backup_router)
-app.include_router(concurrency_router)
+
 Base.metadata.create_all(bind=engine)
-app.include_router(cache_router)
-app.include_router(alerts_router)
+
+
+app.include_router(
+    replication_router,
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    bi_router,
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    backup_router,
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    concurrency_router,
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    cache_router,
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    alerts_router,
+    dependencies=[Depends(get_current_user)]
+)
+
+
 scheduler.start()
+
 
 def classify_query(duration_ms: int):
     if duration_ms < 100:
@@ -42,17 +74,20 @@ def classify_query(duration_ms: int):
     else:
         return "Critical"
 
+
 @app.get("/")
 def root():
     return {
         "message": "DataOps Control Center API running"
     }
 
+
 @app.get("/health")
 def health():
     return {
         "status": "healthy"
     }
+
 
 @app.get("/db-test")
 def db_test():
@@ -83,9 +118,13 @@ def db_test():
             "status": "error",
             "message": str(e)
         }
-        
+
+
 @app.post("/connections")
-def create_connection(connection: ConnectionCreate):
+def create_connection(
+    connection: ConnectionCreate,
+    current_user=Depends(get_current_user)
+):
 
     db: Session = SessionLocal()
 
@@ -97,7 +136,7 @@ def create_connection(connection: ConnectionCreate):
         database_name=connection.database_name,
         user_name=connection.user_name,
         encrypted_password=encrypt_password(
-        connection.password
+            connection.password
         ),
         status="ONLINE"
     )
@@ -105,12 +144,17 @@ def create_connection(connection: ConnectionCreate):
     db.add(new_connection)
     db.commit()
 
+    db.close()
+
     return {
-        "message":"Motor registrado correctamente"
+        "message": "Motor registrado correctamente"
     }
-    
+
+
 @app.get("/connections")
-def get_connections():
+def get_connections(
+    current_user=Depends(get_current_user)
+):
 
     db: Session = SessionLocal()
 
@@ -118,10 +162,15 @@ def get_connections():
         Connection
     ).all()
 
+    db.close()
+
     return connections
 
+
 @app.get("/metrics")
-def get_metrics():
+def get_metrics(
+    current_user=Depends(get_current_user)
+):
 
     db: Session = SessionLocal()
 
@@ -133,8 +182,11 @@ def get_metrics():
 
     return metrics
 
+
 @app.get("/health-summary")
-def health_summary():
+def health_summary(
+    current_user=Depends(get_current_user)
+):
 
     db: Session = SessionLocal()
 
@@ -155,9 +207,13 @@ def health_summary():
         "latest_disk_usage": latest_metric.disk_usage if latest_metric else None,
         "status": "monitoring_active"
     }
-    
+
+
 @app.post("/queries")
-def create_query_log(query: QueryLogCreate):
+def create_query_log(
+    query: QueryLogCreate,
+    current_user=Depends(get_current_user)
+):
 
     db: Session = SessionLocal()
 
@@ -185,7 +241,9 @@ def create_query_log(query: QueryLogCreate):
 
 
 @app.get("/queries")
-def get_query_logs():
+def get_query_logs(
+    current_user=Depends(get_current_user)
+):
 
     db: Session = SessionLocal()
 
@@ -195,45 +253,101 @@ def get_query_logs():
 
     return queries
 
+
 @app.post("/login")
-def login(user:LoginData):
+def login(user: LoginData):
 
-    db:Session=SessionLocal()
+    db: Session = SessionLocal()
 
-    existing_user=db.query(
+    existing_user = db.query(
         User
     ).filter(
-        User.username==user.username
+        User.username == user.username
     ).first()
 
     if not existing_user:
 
-        demo_user=User(
+        demo_user = User(
             username="admin",
             password="admin123"
         )
 
         db.add(demo_user)
         db.commit()
+        db.refresh(demo_user)
 
-        existing_user=demo_user
+        existing_user = demo_user
 
-    if(
-        existing_user.password
-        !=user.password
-    ):
+    if existing_user.password != user.password:
 
-        return{
-            "error":"Credenciales inválidas"
-        }
+        db.close()
 
-    token=create_access_token(
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales inválidas"
+        )
+
+    token = create_access_token(
         {
-            "sub":existing_user.username
+            "sub": existing_user.username
         }
     )
 
-    return{
-        "access_token":token,
-        "token_type":"bearer"
+    db.close()
+
+    return {
+        "access_token": token,
+        "token_type": "bearer"
+    }
+
+
+@app.post("/token")
+def token_login(
+    form_data: OAuth2PasswordRequestForm = Depends()
+):
+
+    db: Session = SessionLocal()
+
+    existing_user = db.query(
+        User
+    ).filter(
+        User.username == form_data.username
+    ).first()
+
+    if not existing_user:
+
+        demo_user = User(
+            username="admin",
+            password="admin123"
+        )
+
+        db.add(demo_user)
+        db.commit()
+        db.refresh(demo_user)
+
+        existing_user = demo_user
+
+    if existing_user.password != form_data.password:
+
+        db.close()
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales inválidas",
+            headers={
+                "WWW-Authenticate": "Bearer"
+            }
+        )
+
+    token = create_access_token(
+        {
+            "sub": existing_user.username
+        }
+    )
+
+    db.close()
+
+    return {
+        "access_token": token,
+        "token_type": "bearer"
     }

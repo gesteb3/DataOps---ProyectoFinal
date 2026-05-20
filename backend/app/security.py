@@ -1,12 +1,16 @@
-from cryptography.fernet import Fernet
+import hashlib
+import os
 
-SECRET_KEY = "N0jP5q4h0a4X5xQ6vJ7J5J8yJ6g3L0P2dQ9Qx2fL1fE="
-cipher = Fernet(SECRET_KEY.encode())
 
 def encrypt_password(password: str):
 
-    encrypted = cipher.encrypt(
-        password.encode()
+    secret = os.getenv(
+        "PASSWORD_SECRET",
+        "dataops_password_secret"
     )
 
-    return encrypted.decode()
+    password_hash = hashlib.sha256(
+        f"{password}{secret}".encode()
+    ).hexdigest()
+
+    return password_hash
