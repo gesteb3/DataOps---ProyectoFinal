@@ -13,7 +13,8 @@ from app.modules.backup import router as backup_router
 from app.jwt_security import create_access_token
 from app.modules.replication import router as replication_router
 from app.modules.cache import router as cache_router
-
+from app.modules.bi import router as bi_router
+from app.modules.alerts import router as alerts_router
 
 app = FastAPI(
     title="DataOps Control Center",
@@ -23,10 +24,12 @@ app = FastAPI(
 app.include_router(
     replication_router
 )
+app.include_router(bi_router)
 app.include_router(backup_router)
 app.include_router(concurrency_router)
 Base.metadata.create_all(bind=engine)
 app.include_router(cache_router)
+app.include_router(alerts_router)
 scheduler.start()
 
 def classify_query(duration_ms: int):

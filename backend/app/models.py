@@ -127,3 +127,54 @@ class CacheMetric(Base):
         DateTime,
         default=datetime.utcnow
     )
+    
+class AlertLog(Base):
+    __tablename__ = "alert_log"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    condition_triggered = Column(String)
+
+    affected_engine = Column(String)
+
+    severity = Column(String)
+
+    action = Column(String)
+
+    resolution_status = Column(
+        String,
+        default="PENDING"
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow
+    )
+
+
+class AlertRule(Base):
+    __tablename__ = "alert_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    rule_name = Column(String)
+
+    metric_name = Column(String)
+
+    operator = Column(String)
+
+    threshold = Column(Float)
+
+    severity = Column(String)
+
+    action = Column(String)
+
+    enabled = Column(
+        Boolean,
+        default=True
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow
+    )
