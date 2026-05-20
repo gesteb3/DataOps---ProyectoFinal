@@ -99,11 +99,19 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    if (token) {
-      loadDashboard();
-    }
-  }, [token]);
+useEffect(() => {
+  if (!token) {
+    return;
+  }
+
+  loadDashboard();
+
+  const interval = setInterval(() => {
+    loadDashboard();
+  }, 15000);
+
+  return () => clearInterval(interval);
+}, [token]);
 
   if (!token) {
     return (
