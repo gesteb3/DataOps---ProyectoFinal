@@ -36,14 +36,20 @@ def capture_metrics():
 scheduler.add_job(
     capture_metrics,
     "interval",
-    minutes=1
+    minutes=5
 )
 
 scheduler.add_job(
     simulate_replication,
     "interval",
-    seconds=30
+    minutes=5
 )
+
+#scheduler.add_job(
+#    full_backup,
+#    "interval",
+#    hours=24
+#)
 
 def run_alert_engine():
 
