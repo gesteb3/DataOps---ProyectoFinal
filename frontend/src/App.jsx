@@ -15,6 +15,7 @@ import {
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function App() {
+  const [backupHistory, setBackupHistory] = useState([]);
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin123");
@@ -74,7 +75,8 @@ function App() {
         alertsRes,
         performanceRes,
         slowQueriesRes,
-        replicationRes
+        replicationRes,
+         backupHistoryRes
       ] = await Promise.all([
         axios.get(`${API_URL}/health-summary`, authHeaders),
         axios.get(`${API_URL}/bi/backup-sla`, authHeaders),
@@ -82,7 +84,8 @@ function App() {
         axios.get(`${API_URL}/alerts/logs`, authHeaders),
         axios.get(`${API_URL}/bi/performance`, authHeaders),
         axios.get(`${API_URL}/bi/top-slow-queries`, authHeaders),
-        axios.get(`${API_URL}/replication/status`, authHeaders)
+        axios.get(`${API_URL}/replication/status`, authHeaders),
+          axios.get(`${API_URL}/backup/history`, authHeaders)
       ]);
 
       setHealth(healthRes.data);
@@ -92,6 +95,7 @@ function App() {
       setPerformance(performanceRes.data.slice(0, 20).reverse());
       setSlowQueries(slowQueriesRes.data);
       setReplication(replicationRes.data.slice(-10));
+      setBackupHistory(backupHistoryRes.data);
     } catch {
       setError("No se pudieron cargar los datos. Revisa el token o el backend.");
     } finally {
@@ -140,6 +144,19 @@ useEffect(() => {
     );
   }
 
+  const totalBackups = backupHistory.length;
+
+  const totalSnapshots = backupHistory.filter((backup) =>
+  ["PRE_DEPLOY", "PRE_TEST", "PRE_IMPORT"].includes(backup.backup_type)
+  ).length;
+
+  const totalReplicationEvents = replication.length;
+
+  const latestReplicationLag =
+    replication.length > 0
+      ? replication[replication.length - 1].replication_lag
+      : 0;
+
   return (
     <main className="dashboard">
       <header className="header">
@@ -185,6 +202,27 @@ useEffect(() => {
           <span>Alertas registradas</span>
           <strong>{alerts?.length ?? 0}</strong>
         </div>
+
+        <div className="card">
+          <span>Backups totales</span>
+          <strong>{totalBackups}</strong>
+        </div>
+
+        <div className="card">
+          <span>Snapshots totales</span>
+          <strong>{totalSnapshots}</strong>
+        </div>
+
+        <div className="card">
+          <span>Eventos de replicación</span>
+          <strong>{totalReplicationEvents}</strong>
+        </div>
+
+        <div className="card">
+          <span>Último lag de replicación</span>
+          <strong>{latestReplicationLag} seg</strong>
+        </div>
+        
       </section>
 
       {alerts.some((alert) => alert.resolution_status === "PENDING") && (
