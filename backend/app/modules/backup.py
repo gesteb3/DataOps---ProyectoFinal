@@ -157,10 +157,28 @@ def inc_backup():
 @router.get("/history")
 def history():
 
-    db=SessionLocal()
+    db = SessionLocal()
 
-    data=db.query(
+    data = db.query(
         BackupHistory
+    ).filter(
+        BackupHistory.snapshot_name == None
+    ).all()
+
+    db.close()
+
+    return data
+
+
+@router.get("/snapshots")
+def snapshots_history():
+
+    db = SessionLocal()
+
+    data = db.query(
+        BackupHistory
+    ).filter(
+        BackupHistory.snapshot_name != None
     ).all()
 
     db.close()
