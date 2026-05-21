@@ -187,6 +187,15 @@ useEffect(() => {
         </div>
       </section>
 
+      {alerts.some((alert) => alert.resolution_status === "PENDING") && (
+        <section className="alert-banner">
+          <strong>Motor de Alertas Activo</strong>
+         <p>
+          Hay alertas pendientes generadas automáticamente por condiciones críticas o de advertencia.
+       </p>
+  </section>
+)}
+
       <section className="grid">
         <div className="panel">
           <h2>Rendimiento temporal</h2>

@@ -1,3 +1,4 @@
+from app.modules.alerts import evaluate_alerts_internal
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.database import SessionLocal
 from app.models import DBMetric, Connection
@@ -20,8 +21,8 @@ def capture_metrics():
                 memory=round(random.uniform(20, 95), 2),
                 connections=random.randint(1, 100),
                 locks=random.randint(0, 10),
-                deadlocks=random.randint(0, 3),
-                disk_usage=round(random.uniform(30, 90), 2)
+                deadlocks=random.randint(0, 6),
+                disk_usage=round(random.uniform(30, 98), 2)
             )
 
             db.add(metric)
@@ -42,4 +43,24 @@ scheduler.add_job(
     simulate_replication,
     "interval",
     seconds=30
+)
+
+def run_alert_engine():
+
+    try:
+        alerts = evaluate_alerts_internal()
+
+        if alerts:
+            print(f"Motor de alertas ejecutado: {len(alerts)} alerta(s) generada(s)")
+        else:
+            print("Motor de alertas ejecutado: sin alertas nuevas")
+
+    except Exception as e:
+        print(f"Error en motor de alertas: {e}")
+
+
+scheduler.add_job(
+    run_alert_engine,
+    "interval",
+    minutes=1
 )

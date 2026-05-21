@@ -1,3 +1,7 @@
+import os
+import smtplib
+
+from email.message import EmailMessage
 from fastapi import APIRouter
 
 from app.database import SessionLocal
@@ -69,44 +73,57 @@ DEFAULT_RULES = [
 ]
 
 
-def create_alert(db, condition, engine, severity, action):
+def send_alert_email(condition, engine, severity, action):
 
-    alert = AlertLog(
-        condition_triggered=condition,
-        affected_engine=engine,
-        severity=severity,
-        action=action,
-        resolution_status="PENDING"
+    email_enabled = os.getenv(
+        "ALERT_EMAIL_ENABLED",
+        "false"
+    ).lower()
+
+    if email_enabled != "true":
+        return
+
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", 587))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    email_to = os.getenv("ALERT_EMAIL_TO")
+
+    if not smtp_host or not smtp_user or not smtp_password or not email_to:
+        return
+
+    message = EmailMessage()
+
+    message["Subject"] = f"DataOps Alert - {severity}"
+    message["From"] = smtp_user
+    message["To"] = email_to
+
+    message.set_content(
+        f"Se generó una alerta en DataOps Control Center.\n\n"
+        f"Condición: {condition}\n"
+        f"Motor afectado: {engine}\n"
+        f"Severidad: {severity}\n"
+        f"Acción configurada: {action}\n"
+        f"Estado: PENDING\n"
     )
 
-    db.add(alert)
-
-    return {
-        "condition_triggered": condition,
-        "affected_engine": engine,
-        "severity": severity,
-        "action": action,
-        "resolution_status": "PENDING"
-    }
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.starttls()
+        server.login(
+            smtp_user,
+            smtp_password
+        )
+        server.send_message(message)
 
 
-@router.post("/init-rules")
-def init_alert_rules():
-
-    db = SessionLocal()
+def ensure_default_rules(db):
 
     existing_rules = db.query(
         AlertRule
     ).count()
 
     if existing_rules > 0:
-
-        db.close()
-
-        return {
-            "message": "Alert rules already configured",
-            "rules_count": existing_rules
-        }
+        return
 
     for rule in DEFAULT_RULES:
 
@@ -124,12 +141,210 @@ def init_alert_rules():
 
     db.commit()
 
-    db.close()
+
+def create_alert(db, condition, engine, severity, action):
+
+    existing_pending = db.query(
+        AlertLog
+    ).filter(
+        AlertLog.condition_triggered == condition,
+        AlertLog.affected_engine == engine,
+        AlertLog.severity == severity,
+        AlertLog.resolution_status == "PENDING"
+    ).first()
+
+    if existing_pending:
+        return None
+
+    alert = AlertLog(
+        condition_triggered=condition,
+        affected_engine=engine,
+        severity=severity,
+        action=action,
+        resolution_status="PENDING"
+    )
+
+    db.add(alert)
+
+    if "correo" in action.lower():
+        send_alert_email(
+            condition,
+            engine,
+            severity,
+            action
+        )
 
     return {
-        "message": "Default alert rules created",
-        "rules_count": len(DEFAULT_RULES)
+        "condition_triggered": condition,
+        "affected_engine": engine,
+        "severity": severity,
+        "action": action,
+        "resolution_status": "PENDING"
     }
+
+
+def evaluate_alerts_internal():
+
+    db = SessionLocal()
+
+    alerts_created = []
+
+    try:
+
+        ensure_default_rules(db)
+
+        rules = db.query(
+            AlertRule
+        ).filter(
+            AlertRule.enabled == True
+        ).all()
+
+        latest_metrics = db.query(
+            DBMetric,
+            Connection
+        ).join(
+            Connection,
+            DBMetric.connection_id == Connection.id
+        ).order_by(
+            DBMetric.capture_time.desc()
+        ).limit(30).all()
+
+        for metric, connection in latest_metrics:
+
+            for rule in rules:
+
+                if rule.metric_name == "cpu" and metric.cpu > rule.threshold:
+
+                    alert = create_alert(
+                        db,
+                        f"CPU > {rule.threshold}%",
+                        connection.nombre,
+                        rule.severity,
+                        rule.action
+                    )
+
+                    if alert:
+                        alerts_created.append(alert)
+
+                if rule.metric_name == "deadlocks" and metric.deadlocks > rule.threshold:
+
+                    alert = create_alert(
+                        db,
+                        f"Deadlocks > {rule.threshold}",
+                        connection.nombre,
+                        rule.severity,
+                        rule.action
+                    )
+
+                    if alert:
+                        alerts_created.append(alert)
+
+                if rule.metric_name == "disk_usage" and metric.disk_usage > rule.threshold:
+
+                    alert = create_alert(
+                        db,
+                        f"Disco > {rule.threshold}%",
+                        connection.nombre,
+                        rule.severity,
+                        rule.action
+                    )
+
+                    if alert:
+                        alerts_created.append(alert)
+
+                if rule.metric_name == "connections" and metric.connections > rule.threshold:
+
+                    alert = create_alert(
+                        db,
+                        f"Conexiones > {rule.threshold}",
+                        connection.nombre,
+                        rule.severity,
+                        rule.action
+                    )
+
+                    if alert:
+                        alerts_created.append(alert)
+
+        latest_replication = db.query(
+            ReplicationStatus
+        ).order_by(
+            ReplicationStatus.created_at.desc()
+        ).first()
+
+        for rule in rules:
+
+            if (
+                rule.metric_name == "replication_lag"
+                and latest_replication
+                and latest_replication.replication_lag > rule.threshold
+            ):
+
+                alert = create_alert(
+                    db,
+                    f"Lag replicación > {rule.threshold} segundos",
+                    "Replica DB",
+                    rule.severity,
+                    rule.action
+                )
+
+                if alert:
+                    alerts_created.append(alert)
+
+            if rule.metric_name == "backup_failed":
+
+                latest_backup = db.query(
+                    BackupHistory
+                ).order_by(
+                    BackupHistory.created_at.desc()
+                ).first()
+
+                if (
+                    not latest_backup
+                    or not latest_backup.cloud_url
+                    or latest_backup.backup_type == "FAILED"
+                ):
+
+                    alert = create_alert(
+                        db,
+                        "Backup fallido o sin URL remota",
+                        "Backup Service",
+                        rule.severity,
+                        rule.action
+                    )
+
+                    if alert:
+                        alerts_created.append(alert)
+
+        db.commit()
+
+        return alerts_created
+
+    finally:
+
+        db.close()
+
+
+@router.post("/init-rules")
+def init_alert_rules():
+
+    db = SessionLocal()
+
+    try:
+
+        ensure_default_rules(db)
+
+        rules_count = db.query(
+            AlertRule
+        ).count()
+
+        return {
+            "message": "Alert rules configured",
+            "rules_count": rules_count
+        }
+
+    finally:
+
+        db.close()
 
 
 @router.get("/rules")
@@ -194,125 +409,7 @@ def update_alert_rule(
 @router.post("/evaluate")
 def evaluate_alerts():
 
-    db = SessionLocal()
-
-    alerts_created = []
-
-    rules = db.query(
-        AlertRule
-    ).filter(
-        AlertRule.enabled == True
-    ).all()
-
-    latest_metrics = db.query(
-        DBMetric,
-        Connection
-    ).join(
-        Connection,
-        DBMetric.connection_id == Connection.id
-    ).order_by(
-        DBMetric.capture_time.desc()
-    ).limit(20).all()
-
-    for metric, connection in latest_metrics:
-
-        for rule in rules:
-
-            if rule.metric_name == "cpu" and metric.cpu > rule.threshold:
-
-                alerts_created.append(
-                    create_alert(
-                        db,
-                        f"CPU > {rule.threshold}%",
-                        connection.nombre,
-                        rule.severity,
-                        rule.action
-                    )
-                )
-
-            if rule.metric_name == "deadlocks" and metric.deadlocks > rule.threshold:
-
-                alerts_created.append(
-                    create_alert(
-                        db,
-                        f"Deadlocks > {rule.threshold}",
-                        connection.nombre,
-                        rule.severity,
-                        rule.action
-                    )
-                )
-
-            if rule.metric_name == "disk_usage" and metric.disk_usage > rule.threshold:
-
-                alerts_created.append(
-                    create_alert(
-                        db,
-                        f"Disco > {rule.threshold}%",
-                        connection.nombre,
-                        rule.severity,
-                        rule.action
-                    )
-                )
-
-            if rule.metric_name == "connections" and metric.connections > rule.threshold:
-
-                alerts_created.append(
-                    create_alert(
-                        db,
-                        f"Conexiones > {rule.threshold}",
-                        connection.nombre,
-                        rule.severity,
-                        rule.action
-                    )
-                )
-
-    latest_replication = db.query(
-        ReplicationStatus
-    ).order_by(
-        ReplicationStatus.created_at.desc()
-    ).first()
-
-    for rule in rules:
-
-        if (
-            rule.metric_name == "replication_lag"
-            and latest_replication
-            and latest_replication.replication_lag > rule.threshold
-        ):
-
-            alerts_created.append(
-                create_alert(
-                    db,
-                    f"Lag replicación > {rule.threshold} segundos",
-                    "Replica DB",
-                    rule.severity,
-                    rule.action
-                )
-            )
-
-        if rule.metric_name == "backup_failed":
-
-            latest_backup = db.query(
-                BackupHistory
-            ).order_by(
-                BackupHistory.created_at.desc()
-            ).first()
-
-            if not latest_backup or not latest_backup.cloud_url:
-
-                alerts_created.append(
-                    create_alert(
-                        db,
-                        "Backup fallido o sin URL remota",
-                        "Backup Service",
-                        rule.severity,
-                        rule.action
-                    )
-                )
-
-    db.commit()
-
-    db.close()
+    alerts_created = evaluate_alerts_internal()
 
     return {
         "message": "Alert evaluation completed",
