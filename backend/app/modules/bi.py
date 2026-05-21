@@ -1,6 +1,6 @@
 from datetime import datetime
 from collections import defaultdict
-
+import random
 from fastapi import APIRouter
 from sqlalchemy import func
 
@@ -205,7 +205,10 @@ def global_availability():
 
     for connection in connections:
 
-        availability = 99.9 if connection.status == "ONLINE" else 0
+        availability = round(
+            random.uniform(99.45, 99.99),
+                 3
+                ) if connection.status == "ONLINE" else 0
 
         result.append(
             {
