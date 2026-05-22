@@ -45,11 +45,11 @@ scheduler.add_job(
     minutes=5
 )
 
-#scheduler.add_job(
-#    full_backup,
-#    "interval",
-#    hours=24
-#)
+scheduler.add_job(
+    full_backup,
+    "interval",
+    hours=24
+)
 
 def run_alert_engine():
 
