@@ -29,6 +29,7 @@ function App() {
   const [performance, setPerformance] = useState([]);
   const [slowQueries, setSlowQueries] = useState([]);
   const [replication, setReplication] = useState([]);
+  const [snapshots, setSnapshots] = useState([]);
 
   const authHeaders = {
     headers: {
@@ -69,24 +70,26 @@ function App() {
 
     try {
       const [
-        healthRes,
-        backupRes,
-        cacheRes,
-        alertsRes,
-        performanceRes,
-        slowQueriesRes,
-        replicationRes,
-         backupHistoryRes
-      ] = await Promise.all([
-        axios.get(`${API_URL}/health-summary`, authHeaders),
-        axios.get(`${API_URL}/bi/backup-sla`, authHeaders),
-        axios.get(`${API_URL}/cache/summary`, authHeaders),
-        axios.get(`${API_URL}/alerts/logs`, authHeaders),
-        axios.get(`${API_URL}/bi/performance`, authHeaders),
-        axios.get(`${API_URL}/bi/top-slow-queries`, authHeaders),
-        axios.get(`${API_URL}/replication/status`, authHeaders),
-          axios.get(`${API_URL}/backup/history`, authHeaders)
-      ]);
+      healthRes,
+      backupRes,
+      cacheRes,
+      alertsRes,
+      performanceRes,
+      slowQueriesRes,
+      replicationRes,
+      backupHistoryRes,
+      snapshotsRes
+    ] = await Promise.all([
+      axios.get(`${API_URL}/health-summary`, authHeaders),
+      axios.get(`${API_URL}/bi/backup-sla`, authHeaders),
+      axios.get(`${API_URL}/cache/summary`, authHeaders),
+      axios.get(`${API_URL}/alerts/logs`, authHeaders),
+      axios.get(`${API_URL}/bi/performance`, authHeaders),
+      axios.get(`${API_URL}/bi/top-slow-queries`, authHeaders),
+      axios.get(`${API_URL}/replication/status`, authHeaders),
+      axios.get(`${API_URL}/backup/history`, authHeaders),
+      axios.get(`${API_URL}/backup/snapshots`, authHeaders)
+    ]);
 
       setHealth(healthRes.data);
       setBackupSla(backupRes.data);
@@ -96,6 +99,7 @@ function App() {
       setSlowQueries(slowQueriesRes.data);
       setReplication(replicationRes.data.slice(-10));
       setBackupHistory(backupHistoryRes.data);
+      setSnapshots(snapshotsRes.data);
     } catch {
       setError("No se pudieron cargar los datos. Revisa el token o el backend.");
     } finally {
@@ -146,9 +150,7 @@ useEffect(() => {
 
   const totalBackups = backupHistory.length;
 
-  const totalSnapshots = backupHistory.filter((backup) =>
-  ["PRE_DEPLOY", "PRE_TEST", "PRE_IMPORT"].includes(backup.backup_type)
-  ).length;
+  const totalSnapshots = snapshots.length;
 
   const totalReplicationEvents = replication.length;
 

@@ -195,20 +195,37 @@ def global_availability():
 
     db = SessionLocal()
 
-    connections = db.query(
+    data = db.query(
+        DBMetric,
         Connection
-    ).all()
+    ).join(
+        Connection,
+        DBMetric.connection_id == Connection.id
+    ).order_by(
+        DBMetric.capture_time.desc()
+    ).limit(300).all()
 
     db.close()
 
     result = []
 
-    for connection in connections:
+    for metric, connection in data:
 
-        availability = round(
-            random.uniform(99.45, 99.99),
-                 3
-                ) if connection.status == "ONLINE" else 0
+        if connection.status == "ONLINE":
+            availability = 100
+
+            availability -= metric.deadlocks * 0.08
+            availability -= metric.locks * 0.015
+
+            if metric.cpu > 80:
+                availability -= (metric.cpu - 80) * 0.02
+
+            availability = round(
+                max(98, min(99.99, availability)),
+                3
+            )
+        else:
+            availability = 0
 
         result.append(
             {
@@ -217,12 +234,12 @@ def global_availability():
                 "status": connection.status,
                 "availability_percentage": availability,
                 "target_percentage": 99.9,
-                "sla_compliance": "Sí" if availability >= 99.9 else "No"
+                "sla_compliance": "Sí" if availability >= 99.9 else "No",
+                "capture_time": metric.capture_time
             }
         )
 
     return result
-
 
 @router.get("/replication-lag")
 def replication_lag_dashboard():
