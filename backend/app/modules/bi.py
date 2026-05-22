@@ -155,7 +155,7 @@ def backup_sla_status():
     )
 
     projected_rto_minutes = round(
-        (latest_backup.duration_seconds * 3) / 60,
+        latest_backup.size_mb / 6,
         2
     )
 
