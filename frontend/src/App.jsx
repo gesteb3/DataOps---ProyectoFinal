@@ -94,7 +94,11 @@ function App() {
       setHealth(healthRes.data);
       setBackupSla(backupRes.data);
       setCacheSummary(cacheRes.data);
-      setAlerts(alertsRes.data);
+      setAlerts(
+        alertsRes.data.filter(
+          (alert) => alert.resolution_status === "PENDING"
+        )
+      );
       setPerformance(performanceRes.data.slice(0, 20).reverse());
       setSlowQueries(slowQueriesRes.data);
       setReplication(replicationRes.data.slice(-10));
