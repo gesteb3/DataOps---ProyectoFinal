@@ -17,6 +17,15 @@ router=APIRouter(
     tags=["Backup"]
 )
 
+def calculate_file_checksum(file_path: str):
+    sha256 = hashlib.sha256()
+
+    with open(file_path, "rb") as file:
+        for block in iter(lambda: file.read(4096), b""):
+            sha256.update(block)
+
+    return sha256.hexdigest()
+
 
 def create_hash(data):
 
@@ -29,7 +38,7 @@ def replicate_to_cloud(local_file_path, file_name):
     cloud_provider = os.getenv(
         "CLOUD_PROVIDER",
         "SIMULATED"
-    )
+    ).upper()
 
     if cloud_provider == "AWS":
 
@@ -40,27 +49,65 @@ def replicate_to_cloud(local_file_path, file_name):
             "us-east-2"
         )
 
-        s3 = boto3.client(
-            "s3",
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-            region_name=region
-        )
+        if not bucket:
+            return {
+                "status": "FAILED",
+                "url": None,
+                "error": "AWS_BUCKET no está configurado"
+            }
 
-        s3.upload_file(
-            local_file_path,
-            bucket,
-            file_name
-        )
+        try:
+            s3 = boto3.client(
+                "s3",
+                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+                region_name=region
+            )
 
-        return f"https://{bucket}.s3.{region}.amazonaws.com/{file_name}"
+            s3.upload_file(
+                local_file_path,
+                bucket,
+                file_name
+            )
+
+            remote_object = s3.head_object(
+                Bucket=bucket,
+                Key=file_name
+            )
+
+            local_size = os.path.getsize(local_file_path)
+            remote_size = remote_object.get("ContentLength", 0)
+
+            if local_size != remote_size:
+                return {
+                    "status": "FAILED",
+                    "url": None,
+                    "error": "El tamaño del archivo en S3 no coincide con el archivo local"
+                }
+
+            return {
+                "status": "SUCCESS",
+                "url": f"https://{bucket}.s3.{region}.amazonaws.com/{file_name}",
+                "error": None
+            }
+
+        except Exception as e:
+            return {
+                "status": "FAILED",
+                "url": None,
+                "error": str(e)
+            }
 
     cloud_bucket = os.getenv(
         "CLOUD_BUCKET",
         "dataops-backups"
     )
 
-    return f"https://simulated-storage/{cloud_bucket}/{file_name}"
+    return {
+        "status": "SIMULATED",
+        "url": f"https://simulated-storage/{cloud_bucket}/{file_name}",
+        "error": None
+    }
 
 def simulate_backup(backup_type):
 
@@ -103,12 +150,17 @@ def simulate_backup(backup_type):
             f"Restore point: {restore}\n"
         )
 
-    hash_value = create_hash(file_name)
+    hash_value = calculate_file_checksum(local_file_path)
 
-    fake_cloud = replicate_to_cloud(
+    cloud_result = replicate_to_cloud(
         local_file_path,
         file_name
     )
+
+    if cloud_result["status"] == "FAILED":
+        fake_cloud = f"CLOUD_REPLICATION_FAILED: {cloud_result['error']}"
+    else:
+        fake_cloud = cloud_result["url"]
         
     backup=BackupHistory(
     backup_type=backup_type,
@@ -127,12 +179,14 @@ def simulate_backup(backup_type):
 
     db.close()
 
-    return{
-        "type":backup_type,
-        "file":file_name,
-        "size_mb":size,
-        "duration_seconds":duration,
-        "cloud":fake_cloud
+    return {
+        "type": backup_type,
+        "file": file_name,
+        "size_mb": size,
+        "duration_seconds": duration,
+        "cloud_status": cloud_result["status"],
+        "cloud": fake_cloud,
+        "checksum": hash_value
     }
 
 

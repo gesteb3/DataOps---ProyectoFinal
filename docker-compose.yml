@@ -3,33 +3,50 @@ services:
     image: postgres:16
     container_name: dataops_postgres
     environment:
-      POSTGRES_USER: dataops
-      POSTGRES_PASSWORD: dataops123
-      POSTGRES_DB: dataops_db
+      POSTGRES_USER: ${POSTGRES_USER:-dataops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dataops123}
+      POSTGRES_DB: ${POSTGRES_DB:-dataops_db}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dataops} -d ${POSTGRES_DB:-dataops_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7
     container_name: dataops_redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   api:
     build: ./backend
     container_name: dataops_api
-
     env_file:
       - .env
-
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dataops}:${POSTGRES_PASSWORD:-dataops123}@postgres:5432/${POSTGRES_DB:-dataops_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-60}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
     ports:
       - "8000:8000"
-
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:

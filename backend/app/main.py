@@ -2,18 +2,16 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 import psycopg2
-
+from app.config import settings
 from sqlalchemy.orm import Session
 
 from app.database import engine
 from app.database import SessionLocal
-from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory, User
+from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory, User, JobAudit
 from app.schemas import ConnectionCreate, QueryLogCreate, LoginData
 from app.security import encrypt_password
 from app.scheduler import scheduler
-
 from app.jwt_security import create_access_token, get_current_user
-
 from app.modules.concurrency import router as concurrency_router
 from app.modules.backup import router as backup_router
 from app.modules.replication import router as replication_router
@@ -27,11 +25,17 @@ app = FastAPI(
     version="1.0"
 )
 
+def get_db():
+    db = SessionLocal()
+
+    try:
+        yield db
+    finally:
+        db.close()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173"
-    ],
+    allow_origins=[origin.strip() for origin in settings.CORS_ORIGINS],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -218,6 +222,14 @@ def health_summary(
         "status": "monitoring_active"
     }
 
+@app.get("/jobs/audit")
+def get_job_audit(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return db.query(JobAudit).order_by(
+        JobAudit.start_time.desc()
+    ).limit(100).all()
 
 @app.post("/queries")
 def create_query_log(

@@ -472,3 +472,35 @@ def resolve_alert(alert_id: int):
             "created_at": alert.created_at
         }
     }
+
+@router.put("/resolve-all")
+def resolve_all_alerts():
+    db = SessionLocal()
+
+    try:
+        pending_alerts = db.query(AlertLog).filter(
+            AlertLog.resolution_status == "PENDING"
+        ).all()
+
+        total = len(pending_alerts)
+
+        for alert in pending_alerts:
+            alert.resolution_status = "RESOLVED"
+
+        db.commit()
+
+        return {
+            "message": "All pending alerts resolved",
+            "alerts_resolved": total
+        }
+
+    except Exception as e:
+        db.rollback()
+
+        return {
+            "error": "Could not resolve pending alerts",
+            "detail": str(e)
+        }
+
+    finally:
+        db.close()

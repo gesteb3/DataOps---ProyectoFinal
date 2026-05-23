@@ -1,9 +1,10 @@
-import time
 import json
-import redis
+import time
 
+import redis
 from fastapi import APIRouter
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models import CacheMetric
 
@@ -15,14 +16,26 @@ router = APIRouter(
 
 
 redis_client = redis.Redis(
-    host="redis",
-    port=6379,
-    db=0,
-    decode_responses=True
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    db=settings.REDIS_DB,
+    decode_responses=True,
+    socket_connect_timeout=2,
+    socket_timeout=2
 )
 
+CACHE_TTL_SECONDS = settings.CACHE_TTL_SECONDS
 
-CACHE_TTL_SECONDS = 60
+def generate_simulated_data(query_key: str):
+    return {
+        "message": "Resultado generado desde base de datos simulada",
+        "query": query_key,
+        "records": [
+            {"id": 1, "name": "DataOps metric"},
+            {"id": 2, "name": "Backup history"},
+            {"id": 3, "name": "Replication status"}
+        ]
+    }
 
 
 def save_cache_metric(query_key, cache_status, response_time_ms):
@@ -43,14 +56,42 @@ def save_cache_metric(query_key, cache_status, response_time_ms):
 
 @router.get("/query/{query_key}")
 def cached_query(query_key: str):
-
     start = time.time()
 
-    cached_data = redis_client.get(query_key)
+    try:
+        cached_data = redis_client.get(query_key)
 
-    if cached_data:
+        if cached_data:
+            time.sleep(0.04)
 
-        time.sleep(0.04)
+            response_time = round(
+                (time.time() - start) * 1000,
+                2
+            )
+
+            save_cache_metric(
+                query_key,
+                "HIT",
+                response_time
+            )
+
+            return {
+                "query_key": query_key,
+                "cache_status": "HIT",
+                "response_time_ms": response_time,
+                "redis_available": True,
+                "data": json.loads(cached_data)
+            }
+
+        time.sleep(0.4)
+
+        data = generate_simulated_data(query_key)
+
+        redis_client.setex(
+            query_key,
+            CACHE_TTL_SECONDS,
+            json.dumps(data)
+        )
 
         response_time = round(
             (time.time() - start) * 1000,
@@ -59,15 +100,42 @@ def cached_query(query_key: str):
 
         save_cache_metric(
             query_key,
-            "HIT",
+            "MISS",
             response_time
         )
 
         return {
             "query_key": query_key,
-            "cache_status": "HIT",
+            "cache_status": "MISS",
             "response_time_ms": response_time,
-            "data": json.loads(cached_data)
+            "redis_available": True,
+            "data": data
+        }
+
+    except redis.RedisError as e:
+        time.sleep(0.4)
+
+        data = generate_simulated_data(query_key)
+
+        response_time = round(
+            (time.time() - start) * 1000,
+            2
+        )
+
+        save_cache_metric(
+            query_key,
+            "CACHE_ERROR",
+            response_time
+        )
+
+        return {
+            "query_key": query_key,
+            "cache_status": "CACHE_ERROR",
+            "response_time_ms": response_time,
+            "redis_available": False,
+            "warning": "Redis no respondió. Se usó fallback sin caché.",
+            "error_detail": str(e),
+            "data": data
         }
 
     time.sleep(0.4)
@@ -161,6 +229,12 @@ def cache_summary():
     ).filter(
         CacheMetric.cache_status == "MISS"
     ).count()
+    
+    cache_errors = db.query(
+        CacheMetric
+    ).filter(
+    CacheMetric.cache_status == "CACHE_ERROR"
+    ).count()
 
     db.close()
 
@@ -178,5 +252,6 @@ def cache_summary():
         "cache_misses": misses,
         "hit_rate_percentage": hit_rate,
         "ttl_seconds": CACHE_TTL_SECONDS,
-        "strategy": "TTL expiration and manual invalidation by event"
+        "strategy": "TTL expiration and manual invalidation by event",
+        "cache_errors": cache_errors
     }

@@ -178,3 +178,14 @@ class AlertRule(Base):
         DateTime,
         default=datetime.utcnow
     )
+    
+class JobAudit(Base):
+    __tablename__ = "job_audit"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_name = Column(String(100), nullable=False)
+    status = Column(String(30), nullable=False)
+    start_time = Column(DateTime, default=datetime.utcnow)
+    end_time = Column(DateTime, nullable=True)
+    records_processed = Column(Integer, default=0)
+    error_message = Column(String, nullable=True)

@@ -1,9 +1,13 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-DATABASE_URL = "postgresql://dataops:dataops123@postgres:5432/dataops_db"
+from app.config import settings
 
-engine = create_engine(DATABASE_URL)
+
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True
+)
 
 SessionLocal = sessionmaker(
     autocommit=False,
