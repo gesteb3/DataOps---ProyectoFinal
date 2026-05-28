@@ -1,12 +1,12 @@
 # DataOps Control Center
 
-DataOps Control Center es una plataforma de monitoreo, respaldo, análisis y alertas para motores de bases de datos. El proyecto integra backend con FastAPI, base de datos PostgreSQL, Redis para caché, AWS S3 para replicación de backups, autenticación JWT, frontend React y dashboard analítico en Power BI.
+DataOps Control Center es una plataforma de monitoreo, respaldo, análisis, caché, replicación y alertas para motores de bases de datos. El proyecto integra backend con FastAPI, base de datos PostgreSQL, Redis para caché, AWS S3 para replicación de backups, autenticación JWT, frontend React con Vite y dashboard analítico en Power BI.
 
 ## Objetivo del proyecto
 
 El objetivo principal es centralizar operaciones críticas de administración de bases de datos, incluyendo monitoreo de salud, análisis de consultas lentas, concurrencia, backups, replicación, caché, visualización ejecutiva y alertas automáticas.
 
-La plataforma permite registrar motores de base de datos, capturar métricas periódicas, analizar rendimiento, ejecutar simulaciones controladas, generar backups, replicarlos a la nube y visualizar el estado operativo desde un dashboard web y Power BI.
+La plataforma permite registrar motores de base de datos, capturar métricas periódicas, analizar rendimiento, ejecutar simulaciones controladas, generar backups, replicarlos a la nube, consultar auditoría de procesos automáticos y visualizar el estado operativo desde un dashboard web y Power BI.
 
 ## Stack tecnológico
 
@@ -27,6 +27,7 @@ Frontend:
 - Axios
 - Recharts
 - CSS responsivo
+- Arquitectura basada en componentes
 
 Infraestructura:
 
@@ -66,15 +67,27 @@ DataOps-Control-Center/
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
+│   │   ├── api/
+│   │   │   └── client.js
+│   │   ├── components/
+│   │   │   ├── Sidebar.jsx
+│   │   │   ├── Header.jsx
+│   │   │   ├── StatCard.jsx
+│   │   │   ├── ChartCard.jsx
+│   │   │   └── DataTable.jsx
+│   │   ├── pages/
+│   │   │   ├── Login.jsx
+│   │   │   └── Dashboard.jsx
 │   │   ├── App.jsx
-│   │   ├── App.css
-│   │   └── main.jsx
+│   │   ├── main.jsx
+│   │   └── index.css
 │   ├── index.html
 │   ├── package.json
 │   └── package-lock.json
 ├── docker-compose.yml
 ├── .env
 ├── .gitignore
+├── Proyecto Final BDII.pbix
 └── README.md
 ```
 
@@ -94,8 +107,8 @@ AWS_SECRET_ACCESS_KEY=TU_SECRET_KEY
 AWS_REGION=us-east-2
 AWS_BUCKET=tu-bucket-s3
 
-JWT_SECRET_KEY=dataops_super_secret_key_2026
-PASSWORD_SECRET=dataops_password_secret_2026
+JWT_SECRET_KEY=CAMBIAR_EN_PRODUCCION
+PASSWORD_SECRET=CAMBIAR_EN_PRODUCCION
 
 ALERT_EMAIL_ENABLED=false
 SMTP_HOST=smtp.gmail.com
@@ -106,6 +119,32 @@ ALERT_EMAIL_TO=correo_destino@gmail.com
 ```
 
 El archivo `.env` no debe subirse al repositorio.
+
+## Variables de entorno del frontend
+
+El frontend usa una variable opcional para definir la URL del backend:
+
+```env
+VITE_API_URL=http://localhost:8000
+```
+
+Si esta variable no existe, el frontend usa por defecto:
+
+```txt
+http://localhost:8000
+```
+
+Esta configuración se encuentra centralizada en:
+
+```txt
+frontend/src/api/client.js
+```
+
+El token JWT se guarda en `localStorage` y se envía automáticamente en las peticiones protegidas mediante:
+
+```txt
+Authorization: Bearer TOKEN
+```
 
 ## Archivo `.gitignore` recomendado
 
@@ -194,6 +233,7 @@ Endpoints protegidos:
 /cache
 /bi
 /alerts
+/jobs
 ```
 
 ## Módulo 1: Registro de motores
@@ -240,6 +280,8 @@ Endpoints:
 GET /metrics
 GET /health-summary
 ```
+
+El dashboard web consume `/health-summary` para mostrar las cards principales del sistema.
 
 ## Módulo 3: Slow Query Monitor
 
@@ -333,10 +375,21 @@ POST /backup/snapshot/{snapshot_name}
 POST /backup/simulate-disaster
 POST /backup/restore
 GET /backup/history
+GET /backup/snapshots
 GET /backup/retention-policy
+GET /bi/backup-sla
 ```
 
 El backend está preparado para ejecutar un backup FULL cada 24 horas mediante APScheduler.
+
+El frontend muestra:
+
+- Historial de backups
+- Snapshots generados
+- Estado de cumplimiento SLA
+- RPO objetivo
+- RTO objetivo
+- Último backup registrado
 
 ## Módulo 6: Replicación Distribuida
 
@@ -363,6 +416,7 @@ El frontend muestra:
 - Eventos de replicación
 - Último lag registrado
 - Gráfica de lag de replicación
+- Tabla de estados recientes
 
 ## Módulo 7: Caché con Redis
 
@@ -390,11 +444,11 @@ GET /cache/metrics
 GET /cache/summary
 ```
 
-El dashboard muestra el porcentaje de cache hit rate.
+El dashboard muestra el porcentaje de cache hit rate, cantidad de hits y cantidad de misses.
 
 ## Módulo 8: Business Intelligence
 
-Se implementaron endpoints preparados para Power BI.
+Se implementaron endpoints preparados para Power BI y para el dashboard React.
 
 Vistas obligatorias cubiertas:
 
@@ -418,11 +472,15 @@ GET /bi/replication-lag
 GET /alerts/logs
 ```
 
-Power BI consume estos endpoints mediante `Authorization: Bearer TOKEN`.
+Power BI consume estos endpoints mediante:
+
+```txt
+Authorization: Bearer TOKEN
+```
 
 Visualizaciones recomendadas:
 
-- Gráfico de líneas para CPU, conexiones y locks
+- Gráfico de líneas para CPU, memoria, disco y conexiones
 - Matriz para heatmap de actividad
 - Tabla ranking de queries lentas
 - Tarjetas SLA, RPO y RTO
@@ -467,37 +525,100 @@ PUT /alerts/rules/{rule_id}
 POST /alerts/evaluate
 GET /alerts/logs
 PUT /alerts/resolve/{alert_id}
+PUT /alerts/resolve-all
 ```
 
 El motor de alertas puede ejecutarse automáticamente desde APScheduler.
 
-El frontend muestra alertas recientes y un banner visual cuando existen alertas pendientes.
+El frontend muestra alertas recientes, un banner visual cuando existen alertas críticas pendientes y permite resolver todas las alertas pendientes desde el dashboard.
+
+## Auditoría de procesos automáticos
+
+El sistema registra la ejecución de procesos automáticos para evidenciar el funcionamiento de tareas programadas.
+
+Endpoint:
+
+```txt
+GET /jobs/audit
+```
+
+Este endpoint permite consultar registros de jobs como:
+
+- Captura automática de métricas
+- Evaluación automática de alertas
+- Simulación de replicación
+- Procesos de backup programado
+
+El dashboard muestra esta información en una tabla de auditoría con estado, cantidad de registros procesados, hora de inicio, hora de fin y mensaje de error si aplica.
 
 ## Frontend React
 
-El frontend implementa:
+El frontend fue rediseñado con una arquitectura más modular usando React, Vite, Axios y Recharts.
 
-- Login con JWT
-- Dashboard operativo
-- Tarjetas de métricas
-- Gráficas con Recharts
-- Alertas recientes
-- Estado de backups y SLA
-- Métricas de Redis
-- Métricas de replicación
-- Diseño responsivo
+La nueva estructura separa responsabilidades en:
+
+- `api/client.js`: cliente Axios centralizado para consumir el backend.
+- `components/`: componentes reutilizables como Sidebar, Header, StatCard, ChartCard y DataTable.
+- `pages/`: pantallas principales como Login y Dashboard.
+- `index.css`: estilos globales del dashboard responsivo.
+
+Funcionalidades implementadas:
+
+- Login con JWT usando `POST /token`.
+- Token guardado en `localStorage`.
+- Envío automático del encabezado `Authorization: Bearer TOKEN`.
+- Dashboard administrativo con sidebar lateral y header superior.
+- Cards de resumen del sistema.
+- Gráficas con Recharts.
+- Tablas para backups, snapshots, alertas, replicación, queries lentas y auditoría.
+- Botón para actualizar el dashboard manualmente.
+- Actualización automática del dashboard.
+- Botón para cerrar sesión.
+- Botón para resolver todas las alertas pendientes.
+- Manejo de errores por sección.
+- Carga de datos usando `Promise.allSettled()` para evitar que falle todo el dashboard si un endpoint no responde.
+- Diseño responsivo para pantallas grandes y pequeñas.
+
+Endpoints consumidos por el dashboard:
+
+```txt
+GET /health-summary
+GET /bi/performance
+GET /bi/top-slow-queries
+GET /bi/backup-sla
+GET /bi/availability
+GET /bi/replication-lag
+GET /replication/status
+GET /backup/history
+GET /backup/snapshots
+GET /cache/summary
+GET /alerts/logs
+PUT /alerts/resolve-all
+GET /jobs/audit
+```
 
 Cards principales:
 
 - Motores registrados
+- Métricas capturadas
 - CPU actual
+- Disco actual
 - SLA Backups
 - Cache Hit Rate
-- Alertas registradas
-- Backups totales
-- Snapshots totales
-- Eventos de replicación
+- Alertas pendientes
 - Último lag de replicación
+
+Secciones principales del dashboard:
+
+- Resumen general
+- Rendimiento temporal
+- Disponibilidad por motor
+- Lag de replicación
+- Top queries lentas
+- Alertas registradas
+- Estado de replicación
+- Backups y cumplimiento SLA
+- Auditoría de jobs automáticos
 
 ## Power BI
 
@@ -539,12 +660,21 @@ Capturas sugeridas para la entrega:
 - Authorize JWT en Swagger
 - Endpoint protegido sin token
 - Endpoint protegido funcionando con token
-- Dashboard React login
-- Dashboard React principal
-- Cards de backups, snapshots y replicación
+- Login del dashboard React
+- Nuevo dashboard React con sidebar lateral
+- Header superior del dashboard
+- Cards principales del dashboard
 - Gráfica de rendimiento temporal
+- Gráfica de disponibilidad por motor
 - Gráfica de lag de replicación
-- Alertas recientes
+- Tabla de top 10 queries lentas
+- Tabla de alertas registradas
+- Botón para resolver todas las alertas
+- Tabla de backups
+- Tabla de snapshots
+- Tabla de auditoría de jobs automáticos
+- Botón de actualización manual
+- Vista responsive del dashboard
 - AWS S3 mostrando archivos `.bak`
 - Power BI con vistas obligatorias
 - Redis cache HIT/MISS
@@ -581,6 +711,15 @@ Levantar frontend:
 
 ```cmd
 cd frontend
+npm install
+npm run dev
+```
+
+Ejecutar frontend con variable de entorno opcional:
+
+```cmd
+cd frontend
+set VITE_API_URL=http://localhost:8000
 npm run dev
 ```
 
@@ -595,9 +734,33 @@ No se deben subir al repositorio:
 - Passwords SMTP
 - Tokens JWT
 - `node_modules`
+- Archivos de entorno reales
 
 El backend protege rutas principales mediante JWT y Swagger permite autenticarse mediante el botón `Authorize`.
 
+El frontend conserva la autenticación JWT, guarda el token en `localStorage` y lo envía automáticamente en cada petición protegida.
+
+## Mejoras visuales implementadas
+
+Se rediseñó el frontend para que el sistema tenga una apariencia más moderna y profesional.
+
+Mejoras principales:
+
+- Sidebar lateral fijo.
+- Header superior con acciones rápidas.
+- Cards de resumen más limpias.
+- Gráficas integradas con Recharts.
+- Tablas administrativas más legibles.
+- Estado visual para alertas críticas.
+- Botón para resolver alertas pendientes.
+- Actualización automática del dashboard.
+- Manejo de errores por sección.
+- Diseño responsivo.
+- Separación del código en componentes reutilizables.
+
+Esta mejora permite que el dashboard sea más claro para monitoreo operativo y más presentable para una exposición universitaria.
+
 ## Conclusión
 
-DataOps Control Center integra monitoreo, análisis, respaldo, replicación, caché, alertas y visualización ejecutiva en una sola plataforma. El sistema demuestra prácticas de DataOps aplicadas a bases de datos empresariales, incluyendo automatización, observabilidad, recuperación ante fallos, seguridad, integración con nube y análisis mediante dashboards.
+DataOps Control Center integra monitoreo, análisis, respaldo, replicación, caché, alertas, auditoría y visualización ejecutiva en una sola plataforma. El sistema demuestra prácticas de DataOps aplicadas a bases de datos empresariales, incluyendo automatización, observabilidad, recuperación ante fallos, seguridad, integración con nube y análisis mediante dashboards.
+
