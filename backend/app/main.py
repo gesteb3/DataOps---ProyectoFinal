@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 import psycopg2
@@ -9,7 +9,7 @@ from app.database import engine
 from app.database import SessionLocal
 from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory, User, JobAudit
 from app.schemas import ConnectionCreate, QueryLogCreate, LoginData
-from app.security import encrypt_password
+from app.security import decrypt_password, encrypt_password
 from app.scheduler import scheduler
 from app.jwt_security import create_access_token, get_current_user
 from app.modules.concurrency import router as concurrency_router
@@ -18,6 +18,7 @@ from app.modules.replication import router as replication_router
 from app.modules.cache import router as cache_router
 from app.modules.bi import router as bi_router
 from app.modules.alerts import router as alerts_router
+from app.services.db_connectors import test_database_connection
 
 
 app = FastAPI(
@@ -137,32 +138,120 @@ def db_test():
 @app.post("/connections")
 def create_connection(
     connection: ConnectionCreate,
+    validate_connection: bool = Query(
+        False,
+        description="Si es true, prueba la conexión real antes de registrar el motor."
+    ),
     current_user=Depends(get_current_user)
 ):
 
     db: Session = SessionLocal()
+    connection_test = None
+    status_value = "ONLINE"
 
-    new_connection = Connection(
-        nombre=connection.nombre,
+    try:
+        if validate_connection:
+            connection_test = test_database_connection(
+                motor=connection.motor,
+                host=connection.host,
+                port=connection.port,
+                database_name=connection.database_name,
+                user_name=connection.user_name,
+                password=connection.password,
+            )
+            status_value = "ONLINE" if connection_test.get("status") == "connected" else "ERROR"
+
+        new_connection = Connection(
+            nombre=connection.nombre,
+            motor=connection.motor,
+            host=connection.host,
+            port=connection.port,
+            database_name=connection.database_name,
+            user_name=connection.user_name,
+            encrypted_password=encrypt_password(
+                connection.password
+            ),
+            status=status_value
+        )
+
+        db.add(new_connection)
+        db.commit()
+        db.refresh(new_connection)
+
+        return {
+            "message": "Motor registrado correctamente",
+            "connection_id": new_connection.id,
+            "status": new_connection.status,
+            "connection_test": connection_test
+        }
+
+    finally:
+        db.close()
+
+
+@app.post("/connections/test")
+def test_connection_direct(
+    connection: ConnectionCreate,
+    current_user=Depends(get_current_user)
+):
+    return test_database_connection(
         motor=connection.motor,
         host=connection.host,
         port=connection.port,
         database_name=connection.database_name,
         user_name=connection.user_name,
-        encrypted_password=encrypt_password(
-            connection.password
-        ),
-        status="ONLINE"
+        password=connection.password,
     )
 
-    db.add(new_connection)
-    db.commit()
 
-    db.close()
+@app.post("/connections/{connection_id}/test")
+def test_saved_connection(
+    connection_id: int,
+    current_user=Depends(get_current_user)
+):
+    db: Session = SessionLocal()
 
-    return {
-        "message": "Motor registrado correctamente"
-    }
+    try:
+        saved_connection = db.query(Connection).filter(Connection.id == connection_id).first()
+
+        if not saved_connection:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Motor no encontrado"
+            )
+
+        try:
+            plain_password = decrypt_password(saved_connection.encrypted_password)
+        except ValueError as exc:
+            saved_connection.status = "ERROR"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc)
+            )
+
+        result = test_database_connection(
+            motor=saved_connection.motor,
+            host=saved_connection.host,
+            port=saved_connection.port,
+            database_name=saved_connection.database_name,
+            user_name=saved_connection.user_name,
+            password=plain_password,
+        )
+
+        saved_connection.status = "ONLINE" if result.get("status") == "connected" else "ERROR"
+        db.commit()
+
+        return {
+            "connection_id": saved_connection.id,
+            "nombre": saved_connection.nombre,
+            "motor": saved_connection.motor,
+            "status": saved_connection.status,
+            "connection_test": result
+        }
+
+    finally:
+        db.close()
 
 
 @app.get("/connections")

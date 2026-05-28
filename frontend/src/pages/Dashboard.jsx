@@ -82,6 +82,64 @@ function statusBadge(status) {
   return <span className={`badge ${isBad ? "danger" : isOk ? "success" : "warning"}`}>{status || "—"}</span>;
 }
 
+const officialEngines = ["PostgreSQL", "SQL Server", "Oracle"];
+
+function normalizeEngineName(value = "") {
+  const text = String(value).toLowerCase();
+
+  if (text.includes("postgres")) return "PostgreSQL";
+  if (text.includes("sql server") || text.includes("sqlserver") || text.includes("mssql")) return "SQL Server";
+  if (text.includes("oracle")) return "Oracle";
+
+  return null;
+}
+
+function getAverageAvailabilityByEngine(items = []) {
+  const grouped = new Map();
+
+  items.forEach((item) => {
+    const rawName =
+      item.motor ||
+      item.engine_type ||
+      item.database_type ||
+      item.engine ||
+      item.nombre ||
+      item.name ||
+      "";
+
+    const engineName = normalizeEngineName(rawName);
+    if (!engineName) return;
+
+    const value = Number(item.availability_percentage ?? item.availability ?? 0);
+    const target = Number(item.target_percentage ?? 99.9);
+
+    if (!grouped.has(engineName)) {
+      grouped.set(engineName, {
+        engine: engineName,
+        total: 0,
+        count: 0,
+        target_percentage: target
+      });
+    }
+
+    const current = grouped.get(engineName);
+    current.total += value;
+    current.count += 1;
+  });
+
+  return officialEngines
+    .map((engine) => {
+      const item = grouped.get(engine);
+      if (!item) return null;
+
+      return {
+        engine: item.engine,
+        availability_percentage: Number((item.total / item.count).toFixed(2)),
+        target_percentage: item.target_percentage
+      };
+    })
+    .filter(Boolean);
+}
 function Dashboard({ onLogout }) {
   const [data, setData] = useState(initialData);
   const [errors, setErrors] = useState({});
@@ -145,10 +203,9 @@ function Dashboard({ onLogout }) {
   );
 
   const availability = useMemo(
-    () => [...(data.availability || [])].reverse().slice(-20),
+    () => getAverageAvailabilityByEngine(data.availability || []),
     [data.availability]
   );
-
   const replicationLag = useMemo(
     () => [...(data.replicationLag || [])].reverse().slice(-12),
     [data.replicationLag]
