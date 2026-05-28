@@ -5,6 +5,16 @@ from typing import Any
 
 import psycopg2
 
+try:
+    import pyodbc
+except ImportError:
+    pyodbc = None
+
+try:
+    import oracledb
+except ImportError:
+    oracledb = None
+
 
 @dataclass
 class ConnectionTestResult:

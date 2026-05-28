@@ -12,3 +12,5 @@ boto3
 python-jose[cryptography]
 passlib[bcrypt]
 python-multipart
+pyodbc
+oracledb
