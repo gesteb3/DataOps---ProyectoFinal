@@ -210,13 +210,14 @@ def inc_backup():
 
 @router.get("/history")
 def history():
-
     db = SessionLocal()
 
     data = db.query(
         BackupHistory
     ).filter(
-        BackupHistory.snapshot_name == None
+        BackupHistory.snapshot_name.is_(None)
+    ).order_by(
+        BackupHistory.created_at.desc()
     ).all()
 
     db.close()
@@ -226,18 +227,20 @@ def history():
 
 @router.get("/snapshots")
 def snapshots_history():
-
     db = SessionLocal()
 
     data = db.query(
         BackupHistory
     ).filter(
-        BackupHistory.snapshot_name != None
+        BackupHistory.snapshot_name.isnot(None)
+    ).order_by(
+        BackupHistory.created_at.desc()
     ).all()
 
     db.close()
 
     return data
+
 
 @router.post("/snapshot/{snapshot_name}")
 def create_snapshot(snapshot_name: str):

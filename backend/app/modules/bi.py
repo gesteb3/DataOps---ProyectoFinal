@@ -121,14 +121,22 @@ def backup_sla_status():
 
     db = SessionLocal()
 
+    valid_backup_types = ["FULL", "DIFF", "INC"]
+
     latest_backup = db.query(
         BackupHistory
+    ).filter(
+        BackupHistory.snapshot_name.is_(None),
+        BackupHistory.backup_type.in_(valid_backup_types)
     ).order_by(
         BackupHistory.created_at.desc()
     ).first()
 
     history = db.query(
         BackupHistory
+    ).filter(
+        BackupHistory.snapshot_name.is_(None),
+        BackupHistory.backup_type.in_(valid_backup_types)
     ).order_by(
         BackupHistory.created_at.desc()
     ).limit(20).all()
@@ -142,9 +150,13 @@ def backup_sla_status():
 
         return {
             "sla_compliance": "No",
-            "reason": "No backups registered",
+            "reason": "No backups FULL, DIFF o INC registrados",
             "rpo_target_minutes": rpo_target_minutes,
-            "rto_target_minutes": rto_target_minutes
+            "rto_target_minutes": rto_target_minutes,
+            "actual_rpo_minutes": 0,
+            "projected_rto_minutes": 0,
+            "latest_backup": None,
+            "backup_history": []
         }
 
     now = datetime.utcnow()
@@ -174,6 +186,7 @@ def backup_sla_status():
             "type": latest_backup.backup_type,
             "file_name": latest_backup.file_name,
             "cloud_url": latest_backup.cloud_url,
+            "hash_value": latest_backup.hash_value,
             "created_at": latest_backup.created_at
         },
         "backup_history": [
@@ -183,12 +196,12 @@ def backup_sla_status():
                 "size_mb": backup.size_mb,
                 "duration_seconds": backup.duration_seconds,
                 "cloud_url": backup.cloud_url,
+                "hash_value": backup.hash_value,
                 "created_at": backup.created_at
             }
             for backup in history
         ]
     }
-
 
 @router.get("/availability")
 def global_availability():
