@@ -142,7 +142,7 @@ def run_alert_engine():
 scheduler.add_job(
     capture_metrics,
     "interval",
-    minutes=5,
+    minutes=1,
     id="capture_metrics",
     replace_existing=True
 )
@@ -150,7 +150,7 @@ scheduler.add_job(
 scheduler.add_job(
     simulate_replication,
     "interval",
-    minutes=5,
+    minutes=1,
     id="simulate_replication",
     replace_existing=True
 )
