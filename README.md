@@ -1,12 +1,10 @@
 # DataOps Control Center
 
-DataOps Control Center es una plataforma de monitoreo, respaldo, análisis, caché, replicación y alertas para motores de bases de datos. El proyecto integra backend con FastAPI, base de datos PostgreSQL, Redis para caché, AWS S3 para replicación de backups, autenticación JWT, frontend React con Vite y dashboard analítico en Power BI.
+DataOps Control Center es una plataforma para monitoreo, respaldo, análisis, caché, replicación y alertas de motores de bases de datos. El proyecto integra FastAPI, PostgreSQL, Redis, AWS S3, autenticación JWT, frontend React con Vite y visualización analítica en Power BI.
 
-## Objetivo del proyecto
+## Objetivo
 
-El objetivo principal es centralizar operaciones críticas de administración de bases de datos, incluyendo monitoreo de salud, análisis de consultas lentas, concurrencia, backups, replicación, caché, visualización ejecutiva y alertas automáticas.
-
-La plataforma permite registrar motores de base de datos, capturar métricas periódicas, analizar rendimiento, ejecutar simulaciones controladas, generar backups, replicarlos a la nube, consultar auditoría de procesos automáticos y visualizar el estado operativo desde un dashboard web y Power BI.
+Centralizar operaciones de administración de bases de datos mediante una plataforma que permite registrar motores, capturar métricas, analizar consultas lentas, simular concurrencia, gestionar backups, replicar información hacia la nube, usar caché con Redis, generar alertas y visualizar indicadores desde un dashboard web y Power BI.
 
 ## Stack tecnológico
 
@@ -19,6 +17,11 @@ Backend:
 - APScheduler
 - JWT
 - Swagger/OpenAPI
+- psycopg2
+- pyodbc
+- oracledb
+- Boto3
+- Redis
 
 Frontend:
 
@@ -27,7 +30,6 @@ Frontend:
 - Axios
 - Recharts
 - CSS responsivo
-- Arquitectura basada en componentes
 
 Infraestructura:
 
@@ -37,13 +39,14 @@ Infraestructura:
 - Redis en contenedor
 - AWS S3 para backups remotos
 - Variables de entorno mediante `.env`
+- ODBC Driver 18 para SQL Server
 
 Business Intelligence:
 
 - Power BI Desktop
 - Endpoints REST protegidos con JWT
 
-## Estructura general del proyecto
+## Estructura del proyecto
 
 ```txt
 DataOps-Control-Center/
@@ -56,6 +59,9 @@ DataOps-Control-Center/
 │   │   │   ├── cache.py
 │   │   │   ├── concurrency.py
 │   │   │   └── replication.py
+│   │   ├── services/
+│   │   │   ├── __init__.py
+│   │   │   └── db_connectors.py
 │   │   ├── database.py
 │   │   ├── jwt_security.py
 │   │   ├── main.py
@@ -93,7 +99,7 @@ DataOps-Control-Center/
 
 ## Variables de entorno
 
-El proyecto utiliza un archivo `.env` en la raíz para manejar credenciales y configuración sensible.
+El proyecto utiliza un archivo `.env` en la raíz para manejar configuración y credenciales.
 
 Ejemplo:
 
@@ -116,49 +122,35 @@ SMTP_PORT=587
 SMTP_USER=correo_origen@gmail.com
 SMTP_PASSWORD=app_password
 ALERT_EMAIL_TO=correo_destino@gmail.com
+
+CACHE_TTL_SECONDS=60
 ```
 
 El archivo `.env` no debe subirse al repositorio.
 
 ## Variables de entorno del frontend
 
-El frontend usa una variable opcional para definir la URL del backend:
+El frontend puede usar una variable opcional para definir la URL del backend:
 
 ```env
 VITE_API_URL=http://localhost:8000
 ```
 
-Si esta variable no existe, el frontend usa por defecto:
+Si no existe, el frontend usa por defecto:
 
 ```txt
 http://localhost:8000
 ```
 
-Esta configuración se encuentra centralizada en:
+Esta configuración está centralizada en:
 
 ```txt
 frontend/src/api/client.js
 ```
 
-El token JWT se guarda en `localStorage` y se envía automáticamente en las peticiones protegidas mediante:
+## Instalación y ejecución
 
-```txt
-Authorization: Bearer TOKEN
-```
-
-## Archivo `.gitignore` recomendado
-
-```txt
-.env
-node_modules/
-frontend/node_modules/
-__pycache__/
-*.pyc
-.venv/
-backups/
-```
-
-## Ejecución con Docker
+### Levantar backend, PostgreSQL y Redis con Docker
 
 Desde la raíz del proyecto:
 
@@ -168,12 +160,14 @@ docker compose up --build
 
 Servicios principales:
 
-- API FastAPI: `http://localhost:8000`
-- Swagger/OpenAPI: `http://localhost:8000/docs`
-- PostgreSQL: puerto `5432`
-- Redis: puerto `6379`
+```txt
+API FastAPI: http://localhost:8000
+Swagger/OpenAPI: http://localhost:8000/docs
+PostgreSQL: localhost:5432
+Redis: localhost:6379
+```
 
-## Ejecución del frontend
+### Levantar frontend
 
 En otra terminal:
 
@@ -196,13 +190,13 @@ Usuario: admin
 Contraseña: admin123
 ```
 
-## Autenticación JWT
+## Autenticación
 
-La autenticación JWT es obligatoria para los endpoints principales.
+El sistema usa autenticación JWT.
 
 Flujo:
 
-1. El usuario inicia sesión mediante `/token`.
+1. El usuario inicia sesión mediante `POST /token`.
 2. El backend genera un token JWT.
 3. El frontend guarda el token en `localStorage`.
 4. Las peticiones protegidas usan el encabezado:
@@ -221,7 +215,7 @@ POST /login
 POST /token
 ```
 
-Endpoints protegidos:
+Rutas protegidas principales:
 
 ```txt
 /connections
@@ -236,42 +230,51 @@ Endpoints protegidos:
 /jobs
 ```
 
-## Módulo 1: Registro de motores
+## Módulos principales
 
-Permite registrar motores de base de datos dentro del sistema.
+### Módulo 1: Registro de motores
 
-Motores permitidos:
+Permite registrar motores de bases de datos.
 
-- PostgreSQL
-- SQL Server
-- Oracle
+Motores soportados:
 
-Endpoint principal:
+```txt
+PostgreSQL
+SQL Server
+Oracle
+```
+
+Endpoints principales:
 
 ```txt
 POST /connections
 GET /connections
+POST /connections/test
+POST /connections/{connection_id}/test
+POST /connections?validate_connection=true
 ```
 
-El esquema valida que el campo `motor` solo acepte valores definidos por el lineamiento del proyecto.
-
-## Módulo 2: Health Check automático
-
-Se implementó captura automática de métricas mediante APScheduler.
-
-Métricas capturadas:
-
-- CPU
-- Memoria
-- Conexiones activas
-- Locks
-- Deadlocks
-- Uso de disco
-
-Frecuencia configurada:
+La validación de conectividad se realiza mediante:
 
 ```txt
-Cada 1 minuto
+PostgreSQL: psycopg2
+SQL Server: pyodbc
+Oracle: oracledb
+```
+
+### Módulo 2: Health Check automático
+
+Captura métricas periódicas de los motores registrados.
+
+Métricas:
+
+```txt
+CPU
+Memoria
+Conexiones activas
+Locks
+Deadlocks
+Uso de disco
 ```
 
 Endpoints:
@@ -281,18 +284,18 @@ GET /metrics
 GET /health-summary
 ```
 
-El dashboard web consume `/health-summary` para mostrar las cards principales del sistema.
+### Módulo 3: Slow Query Monitor
 
-## Módulo 3: Slow Query Monitor
-
-Permite registrar consultas ejecutadas, medir duración y clasificarlas automáticamente.
+Registra y clasifica consultas según su duración.
 
 Clasificación:
 
-- Fast
-- Medium
-- Slow
-- Critical
+```txt
+Fast: menor a 100 ms
+Medium: entre 100 ms y 500 ms
+Slow: entre 500 ms y 2000 ms
+Critical: mayor a 2000 ms
+```
 
 Endpoints:
 
@@ -302,68 +305,58 @@ GET /queries
 GET /bi/top-slow-queries
 ```
 
-El dashboard y Power BI muestran el ranking de las consultas con mayor duración promedio.
+### Módulo 4: Concurrencia y Deadlocks
 
-## Módulo 4: Concurrencia y Deadlocks
+Simula concurrencia con usuarios ejecutando operaciones mixtas.
 
-Se implementó una simulación de concurrencia con 100 usuarios simulados usando `ThreadPoolExecutor`.
+Operaciones:
 
-El módulo ejecuta operaciones mixtas:
+```txt
+INSERT
+UPDATE
+DELETE
+SELECT
+```
 
-- INSERT
-- UPDATE
-- DELETE
-- SELECT
+Tipos de bloqueo:
 
-Tipos de bloqueo registrados:
-
-- SHARED
-- EXCLUSIVE
-- DEADLOCK
-- TIMEOUT
+```txt
+SHARED
+EXCLUSIVE
+DEADLOCK
+TIMEOUT
+```
 
 Endpoints:
 
 ```txt
 POST /concurrency/simulate
+POST /concurrency/simulate?force_deadlock=true
+POST /concurrency/simulate?force_timeout=true
+POST /concurrency/real-deadlock-postgres
 GET /concurrency/summary
 GET /concurrency/logs
 ```
 
-La evidencia principal del módulo es que el endpoint de simulación devuelve:
+### Módulo 5: Backup, Recovery y Nube
 
-```txt
-total_users: 100
-total_transactions: 100
-```
-
-## Módulo 5: Backup, Recovery y Replicación hacia la Nube
-
-Se implementó gestión de backups y replicación real hacia AWS S3.
+Gestiona backups, snapshots, restauración y replicación hacia AWS S3.
 
 Tipos de backup:
 
-- FULL
-- DIFF
-- INC
+```txt
+FULL
+DIFF
+INC
+```
 
 Snapshots:
 
-- PRE_DEPLOY
-- PRE_TEST
-- PRE_IMPORT
-
-Funciones implementadas:
-
-- Registro en `backup_history`
-- Generación de archivo local
-- Hash SHA256
-- Subida automática a AWS S3
-- Registro de URL remota
-- Política de retención configurable
-- Simulación de desastre
-- Restauración con RPO/RTO
-- SLA Sí/No
+```txt
+PRE_DEPLOY
+PRE_TEST
+PRE_IMPORT
+```
 
 Endpoints:
 
@@ -380,20 +373,11 @@ GET /backup/retention-policy
 GET /bi/backup-sla
 ```
 
-El backend está preparado para ejecutar un backup FULL cada 24 horas mediante APScheduler.
+Cada backup genera un hash SHA256 para verificar integridad del archivo.
 
-El frontend muestra:
+### Módulo 6: Replicación distribuida
 
-- Historial de backups
-- Snapshots generados
-- Estado de cumplimiento SLA
-- RPO objetivo
-- RTO objetivo
-- Último backup registrado
-
-## Módulo 6: Replicación Distribuida
-
-Se implementó simulación de replicación primario-réplica.
+Simula una arquitectura primario-réplica con medición de lag.
 
 Escenarios:
 
@@ -411,29 +395,18 @@ GET /replication/status
 GET /bi/replication-lag
 ```
 
-El frontend muestra:
+### Módulo 7: Caché con Redis
 
-- Eventos de replicación
-- Último lag registrado
-- Gráfica de lag de replicación
-- Tabla de estados recientes
+Implementa Redis como capa de caché para consultas frecuentes.
 
-## Módulo 7: Caché con Redis
+Comportamientos:
 
-Redis se implementó como capa de caché para consultas frecuentes.
-
-Comportamientos registrados:
-
-- Cache HIT
-- Cache MISS
-- Tiempo de respuesta
-- TTL
-- Invalidación manual
-
-Comparativa esperada:
-
-- Sin caché: aproximadamente 400 ms
-- Con caché: aproximadamente 40 ms
+```txt
+Cache HIT
+Cache MISS
+TTL
+Invalidación manual
+```
 
 Endpoints:
 
@@ -444,21 +417,9 @@ GET /cache/metrics
 GET /cache/summary
 ```
 
-El dashboard muestra el porcentaje de cache hit rate, cantidad de hits y cantidad de misses.
+### Módulo 8: Business Intelligence
 
-## Módulo 8: Business Intelligence
-
-Se implementaron endpoints preparados para Power BI y para el dashboard React.
-
-Vistas obligatorias cubiertas:
-
-- Rendimiento temporal
-- Heatmap de actividad
-- Top queries lentas
-- Estado de backups y SLA
-- Disponibilidad global
-- Lag de replicación
-- Alertas
+Expone endpoints preparados para Power BI y el dashboard React.
 
 Endpoints BI:
 
@@ -472,49 +433,20 @@ GET /bi/replication-lag
 GET /alerts/logs
 ```
 
-Power BI consume estos endpoints mediante:
+### Módulo 9: Motor de alertas
+
+Genera alertas automáticas según reglas configurables.
+
+Reglas principales:
 
 ```txt
-Authorization: Bearer TOKEN
+CPU > 85%
+Deadlocks > 3
+Backup fallido
+Lag de replicación > 10 segundos
+Disco > 90%
+Conexiones > umbral
 ```
-
-Visualizaciones recomendadas:
-
-- Gráfico de líneas para CPU, memoria, disco y conexiones
-- Matriz para heatmap de actividad
-- Tabla ranking de queries lentas
-- Tarjetas SLA, RPO y RTO
-- Gráfico de barras de disponibilidad
-- Tabla de alertas
-
-## Módulo 9: Motor de Alertas
-
-Se implementó un motor de alertas configurable y automático.
-
-Reglas mínimas:
-
-| Condición | Acción | Severidad |
-|---|---|---|
-| CPU > 85% | Correo electrónico | Warning |
-| Deadlocks > 3 | Alerta crítica en dashboard | Critical |
-| Backup fallido | Alarma roja + correo | Critical |
-| Lag replicación > 10 seg | Notificación en dashboard | Warning |
-| Disco > 90% | Correo + alerta visual | Critical |
-| Conexiones > umbral | Notificación automática | Warning |
-
-Tablas:
-
-- `alert_rules`
-- `alert_log`
-
-Cada alerta registra:
-
-- Timestamp
-- Condición disparadora
-- Motor afectado
-- Severidad
-- Acción
-- Estado de resolución
 
 Endpoints:
 
@@ -528,13 +460,9 @@ PUT /alerts/resolve/{alert_id}
 PUT /alerts/resolve-all
 ```
 
-El motor de alertas puede ejecutarse automáticamente desde APScheduler.
+### Auditoría de procesos automáticos
 
-El frontend muestra alertas recientes, un banner visual cuando existen alertas críticas pendientes y permite resolver todas las alertas pendientes desde el dashboard.
-
-## Auditoría de procesos automáticos
-
-El sistema registra la ejecución de procesos automáticos para evidenciar el funcionamiento de tareas programadas.
+Registra la ejecución de jobs automáticos del sistema.
 
 Endpoint:
 
@@ -542,42 +470,26 @@ Endpoint:
 GET /jobs/audit
 ```
 
-Este endpoint permite consultar registros de jobs como:
-
-- Captura automática de métricas
-- Evaluación automática de alertas
-- Simulación de replicación
-- Procesos de backup programado
-
-El dashboard muestra esta información en una tabla de auditoría con estado, cantidad de registros procesados, hora de inicio, hora de fin y mensaje de error si aplica.
-
 ## Frontend React
 
-El frontend fue rediseñado con una arquitectura más modular usando React, Vite, Axios y Recharts.
+El frontend está construido con React y Vite.
 
-La nueva estructura separa responsabilidades en:
+Características principales:
 
-- `api/client.js`: cliente Axios centralizado para consumir el backend.
-- `components/`: componentes reutilizables como Sidebar, Header, StatCard, ChartCard y DataTable.
-- `pages/`: pantallas principales como Login y Dashboard.
-- `index.css`: estilos globales del dashboard responsivo.
-
-Funcionalidades implementadas:
-
-- Login con JWT usando `POST /token`.
-- Token guardado en `localStorage`.
-- Envío automático del encabezado `Authorization: Bearer TOKEN`.
-- Dashboard administrativo con sidebar lateral y header superior.
-- Cards de resumen del sistema.
-- Gráficas con Recharts.
-- Tablas para backups, snapshots, alertas, replicación, queries lentas y auditoría.
-- Botón para actualizar el dashboard manualmente.
-- Actualización automática del dashboard.
-- Botón para cerrar sesión.
-- Botón para resolver todas las alertas pendientes.
-- Manejo de errores por sección.
-- Carga de datos usando `Promise.allSettled()` para evitar que falle todo el dashboard si un endpoint no responde.
-- Diseño responsivo para pantallas grandes y pequeñas.
+```txt
+Login con JWT
+Dashboard administrativo
+Sidebar lateral
+Header superior
+Cards de resumen
+Gráficas con Recharts
+Tablas administrativas
+Botón de actualización manual
+Actualización automática
+Botón para cerrar sesión
+Botón para resolver alertas
+Manejo de errores por sección
+```
 
 Endpoints consumidos por el dashboard:
 
@@ -597,34 +509,11 @@ PUT /alerts/resolve-all
 GET /jobs/audit
 ```
 
-Cards principales:
-
-- Motores registrados
-- Métricas capturadas
-- CPU actual
-- Disco actual
-- SLA Backups
-- Cache Hit Rate
-- Alertas pendientes
-- Último lag de replicación
-
-Secciones principales del dashboard:
-
-- Resumen general
-- Rendimiento temporal
-- Disponibilidad por motor
-- Lag de replicación
-- Top queries lentas
-- Alertas registradas
-- Estado de replicación
-- Backups y cumplimiento SLA
-- Auditoría de jobs automáticos
-
 ## Power BI
 
-Power BI se conecta a los endpoints protegidos usando token JWT.
+Power BI consume endpoints protegidos mediante JWT.
 
-Ejemplo de conexión:
+Ejemplo:
 
 ```txt
 URL: http://localhost:8000/bi/performance
@@ -643,44 +532,6 @@ http://localhost:8000/bi/availability
 http://localhost:8000/alerts/logs
 ```
 
-Páginas recomendadas del dashboard:
-
-- Resumen Ejecutivo
-- Rendimiento Temporal
-- Heatmap de Actividad
-- Top Queries Lentas
-- Backups y SLA
-- Disponibilidad y Alertas
-
-## Evidencias recomendadas
-
-Capturas sugeridas para la entrega:
-
-- Swagger con endpoints cargados
-- Authorize JWT en Swagger
-- Endpoint protegido sin token
-- Endpoint protegido funcionando con token
-- Login del dashboard React
-- Nuevo dashboard React con sidebar lateral
-- Header superior del dashboard
-- Cards principales del dashboard
-- Gráfica de rendimiento temporal
-- Gráfica de disponibilidad por motor
-- Gráfica de lag de replicación
-- Tabla de top 10 queries lentas
-- Tabla de alertas registradas
-- Botón para resolver todas las alertas
-- Tabla de backups
-- Tabla de snapshots
-- Tabla de auditoría de jobs automáticos
-- Botón de actualización manual
-- Vista responsive del dashboard
-- AWS S3 mostrando archivos `.bak`
-- Power BI con vistas obligatorias
-- Redis cache HIT/MISS
-- Simulación de concurrencia con 100 usuarios
-- Logs de alertas generadas
-
 ## Comandos útiles
 
 Levantar servicios:
@@ -695,13 +546,20 @@ Detener servicios:
 docker compose down
 ```
 
+Reconstruir servicios:
+
+```cmd
+docker compose down
+docker compose up --build
+```
+
 Entrar a PostgreSQL:
 
 ```cmd
 docker exec -it dataops_postgres psql -U dataops -d dataops_db
 ```
 
-Ver contenedores:
+Ver contenedores activos:
 
 ```cmd
 docker ps
@@ -715,7 +573,7 @@ npm install
 npm run dev
 ```
 
-Ejecutar frontend con variable de entorno opcional:
+Ejecutar frontend usando variable de entorno:
 
 ```cmd
 cd frontend
@@ -725,42 +583,19 @@ npm run dev
 
 ## Seguridad
 
-El proyecto usa variables de entorno para credenciales sensibles.
-
 No se deben subir al repositorio:
 
-- `.env`
-- Credenciales AWS
-- Passwords SMTP
-- Tokens JWT
-- `node_modules`
-- Archivos de entorno reales
+```txt
+.env
+Credenciales AWS
+Passwords SMTP
+Tokens JWT
+node_modules
+Archivos de entorno reales
+```
 
-El backend protege rutas principales mediante JWT y Swagger permite autenticarse mediante el botón `Authorize`.
+El backend protege las rutas principales mediante JWT.
 
-El frontend conserva la autenticación JWT, guarda el token en `localStorage` y lo envía automáticamente en cada petición protegida.
+El frontend conserva el token en `localStorage` y lo envía automáticamente en las peticiones protegidas.
 
-## Mejoras visuales implementadas
-
-Se rediseñó el frontend para que el sistema tenga una apariencia más moderna y profesional.
-
-Mejoras principales:
-
-- Sidebar lateral fijo.
-- Header superior con acciones rápidas.
-- Cards de resumen más limpias.
-- Gráficas integradas con Recharts.
-- Tablas administrativas más legibles.
-- Estado visual para alertas críticas.
-- Botón para resolver alertas pendientes.
-- Actualización automática del dashboard.
-- Manejo de errores por sección.
-- Diseño responsivo.
-- Separación del código en componentes reutilizables.
-
-Esta mejora permite que el dashboard sea más claro para monitoreo operativo y más presentable para una exposición universitaria.
-
-## Conclusión
-
-DataOps Control Center integra monitoreo, análisis, respaldo, replicación, caché, alertas, auditoría y visualización ejecutiva en una sola plataforma. El sistema demuestra prácticas de DataOps aplicadas a bases de datos empresariales, incluyendo automatización, observabilidad, recuperación ante fallos, seguridad, integración con nube y análisis mediante dashboards.
-
+Las credenciales de conexión de motores no deben almacenarse en texto plano.
