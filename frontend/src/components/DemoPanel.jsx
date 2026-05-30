@@ -4,11 +4,11 @@ import { api, API_URL } from "../api/client";
 const directEndpoints = [
   { label: "Simular concurrencia", method: "POST", path: "/concurrency/simulate" },
   { label: "Deadlock real PostgreSQL", method: "POST", path: "/concurrency/real-deadlock-postgres" },
+  { label: "Listar conexiones", method: "GET", path: "/connections" },
   { label: "Simular desastre", method: "POST", path: "/backup/simulate-disaster" },
   { label: "Restaurar backup", method: "POST", path: "/backup/restore" },
   { label: "Evaluar alertas", method: "POST", path: "/alerts/evaluate" },
   { label: "Simular replicación", method: "POST", path: "/replication/simulate" },
-  { label: "Probar conexiones", method: "POST", path: "/connections/test" },
   { label: "Backup full", method: "POST", path: "/backup/full" },
   { label: "Backup diferencial", method: "POST", path: "/backup/diff" },
   { label: "Backup incremental", method: "POST", path: "/backup/inc" },
@@ -52,6 +52,9 @@ const initialConsole = {
   payload: null
 };
 
+const defaultConnectionJson =
+  '{"nombre":"PostgreSQL","motor":"PostgreSQL","host":"postgres","port":5432,"database_name":"dataops_db","user_name":"dataops","password":"dataops123"}';
+
 function buildPath(pathTemplate, inputName, value) {
   return pathTemplate.replace(`{${inputName}}`, encodeURIComponent(value.trim()));
 }
@@ -89,11 +92,15 @@ function getErrorPayload(error) {
 function DemoPanel({ open, onClose, onAfterRun }) {
   const [consoleState, setConsoleState] = useState(initialConsole);
   const [runningKey, setRunningKey] = useState("");
+
   const [params, setParams] = useState({
     "invalidate-cache": "",
     "test-connection-by-id": "",
     "get-cache-query": ""
   });
+
+  const [connectionTestJson, setConnectionTestJson] = useState(defaultConnectionJson);
+  const [connectionRegisterJson, setConnectionRegisterJson] = useState(defaultConnectionJson);
 
   const isRunning = Boolean(runningKey);
 
@@ -113,7 +120,7 @@ function DemoPanel({ open, onClose, onAfterRun }) {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [open, onClose]);
 
-  const executeRequest = async ({ key, label, method, path }) => {
+  const executeRequest = async ({ key, label, method, path, data }) => {
     const requestKey = key || `${method}-${path}`;
     const startedAt = performance.now();
 
@@ -128,7 +135,16 @@ function DemoPanel({ open, onClose, onAfterRun }) {
     });
 
     try {
-      const response = await api.request({ method, url: path });
+      const requestConfig = {
+        method,
+        url: path
+      };
+
+      if (data !== undefined && data !== null) {
+        requestConfig.data = data;
+      }
+
+      const response = await api.request(requestConfig);
       const duration = Math.round(performance.now() - startedAt);
 
       setConsoleState({
@@ -185,11 +201,66 @@ function DemoPanel({ open, onClose, onAfterRun }) {
     });
   };
 
+  const executeConnectionTest = () => {
+    try {
+      const body = JSON.parse(connectionTestJson);
+
+      executeRequest({
+        key: "connection-test",
+        label: "Probar conexión",
+        method: "POST",
+        path: "/connections/test",
+        data: body
+      });
+    } catch {
+      setConsoleState({
+        status: "error",
+        title: "JSON inválido",
+        detail: "Revisa comillas, comas o llaves del body.",
+        method: "POST",
+        path: "/connections/test",
+        payload: {
+          error: "El body ingresado no tiene formato JSON válido."
+        }
+      });
+    }
+  };
+
+  const executeConnectionRegister = () => {
+    try {
+      const body = JSON.parse(connectionRegisterJson);
+
+      executeRequest({
+        key: "connection-register",
+        label: "Registrar conexión",
+        method: "POST",
+        path: "/connections",
+        data: body
+      });
+    } catch {
+      setConsoleState({
+        status: "error",
+        title: "JSON inválido",
+        detail: "Revisa comillas, comas o llaves del body.",
+        method: "POST",
+        path: "/connections",
+        payload: {
+          error: "El body ingresado no tiene formato JSON válido."
+        }
+      });
+    }
+  };
+
   if (!open) return null;
 
   return (
     <div className="demo-panel-layer" role="presentation">
-      <button className="demo-panel-backdrop" type="button" aria-label="Cerrar panel de pruebas" onClick={onClose} />
+      <button
+        className="demo-panel-backdrop"
+        type="button"
+        aria-label="Cerrar panel de pruebas"
+        onClick={onClose}
+      />
 
       <aside className="demo-panel" aria-label="Panel lateral de pruebas de API">
         <header className="demo-panel-header">
@@ -198,7 +269,13 @@ function DemoPanel({ open, onClose, onAfterRun }) {
             <h2>{panelTitle}</h2>
             <p>Ejecuta endpoints sin salir del dashboard.</p>
           </div>
-          <button className="demo-panel-close" type="button" onClick={onClose} aria-label="Cerrar panel">
+
+          <button
+            className="demo-panel-close"
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar panel"
+          >
             ×
           </button>
         </header>
@@ -206,6 +283,7 @@ function DemoPanel({ open, onClose, onAfterRun }) {
         <div className="demo-panel-body">
           <section className="demo-panel-section">
             <h3>Endpoints directos</h3>
+
             <div className="demo-endpoint-list">
               {directEndpoints.map((endpoint) => {
                 const requestKey = `${endpoint.method}-${endpoint.path}`;
@@ -228,18 +306,68 @@ function DemoPanel({ open, onClose, onAfterRun }) {
 
           <section className="demo-panel-section">
             <h3>Endpoints parametrizados</h3>
+
             <div className="demo-param-list">
+              <div className="demo-param-row">
+                <div>
+                  <strong>Registrar conexión</strong>
+                  <span>POST /connections</span>
+                </div>
+
+                <input
+                  value={connectionRegisterJson}
+                  placeholder='{"nombre":"PostgreSQL","motor":"PostgreSQL"...}'
+                  onChange={(event) => setConnectionRegisterJson(event.target.value)}
+                />
+
+                <button
+                  type="button"
+                  disabled={isRunning}
+                  onClick={executeConnectionRegister}
+                >
+                  Ejecutar
+                </button>
+              </div>
+
+              <div className="demo-param-row">
+                <div>
+                  <strong>Probar conexión</strong>
+                  <span>POST /connections/test</span>
+                </div>
+
+                <input
+                  value={connectionTestJson}
+                  placeholder='{"nombre":"PostgreSQL","motor":"PostgreSQL"...}'
+                  onChange={(event) => setConnectionTestJson(event.target.value)}
+                />
+
+                <button
+                  type="button"
+                  disabled={isRunning}
+                  onClick={executeConnectionTest}
+                >
+                  Ejecutar
+                </button>
+              </div>
+
               {parameterizedEndpoints.map((endpoint) => (
                 <div className="demo-param-row" key={endpoint.key}>
                   <div>
                     <strong>{endpoint.label}</strong>
-                    <span>{endpoint.method} {endpoint.pathTemplate}</span>
+                    <span>
+                      {endpoint.method} {endpoint.pathTemplate}
+                    </span>
                   </div>
 
                   <input
                     value={params[endpoint.key]}
                     placeholder={endpoint.placeholder}
-                    onChange={(event) => setParams((current) => ({ ...current, [endpoint.key]: event.target.value }))}
+                    onChange={(event) =>
+                      setParams((current) => ({
+                        ...current,
+                        [endpoint.key]: event.target.value
+                      }))
+                    }
                   />
 
                   <button
@@ -261,10 +389,13 @@ function DemoPanel({ open, onClose, onAfterRun }) {
               <strong>{consoleState.title}</strong>
               <span>{consoleState.detail}</span>
             </div>
+
             {consoleState.method && <small>{consoleState.method}</small>}
           </div>
 
-          {consoleState.path && <code className="demo-console-path">{consoleState.path}</code>}
+          {consoleState.path && (
+            <code className="demo-console-path">{consoleState.path}</code>
+          )}
 
           <pre>{formatPayload(consoleState.payload)}</pre>
         </footer>
