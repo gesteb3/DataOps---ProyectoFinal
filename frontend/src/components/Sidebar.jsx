@@ -7,7 +7,12 @@ const menuItems = [
   { label: "Auditoría", href: "#audit", icon: "✓" }
 ];
 
-function Sidebar() {
+function Sidebar({ onOpenDemoPanel }) {
+  const handleOpenDemoPanel = (event) => {
+    event.preventDefault();
+    onOpenDemoPanel();
+  };
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -25,6 +30,11 @@ function Sidebar() {
             {item.label}
           </a>
         ))}
+
+        <button className="sidebar-demo-button" type="button" onClick={handleOpenDemoPanel}>
+          <span>⚙</span>
+          Demo/Pruebas
+        </button>
       </nav>
 
       <div className="sidebar-card">

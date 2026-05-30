@@ -19,6 +19,7 @@ import Header from "../components/Header";
 import StatCard from "../components/StatCard";
 import ChartCard from "../components/ChartCard";
 import DataTable from "../components/DataTable";
+import DemoPanel from "../components/DemoPanel";
 
 const initialData = {
   health: null,
@@ -145,6 +146,7 @@ function Dashboard({ onLogout }) {
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(true);
   const [actionMessage, setActionMessage] = useState("");
+  const [isDemoPanelOpen, setIsDemoPanelOpen] = useState(false);
 
   const loadDashboard = async ({ silent = false } = {}) => {
     if (!silent) {
@@ -227,7 +229,12 @@ function Dashboard({ onLogout }) {
 
   return (
     <div className="app-shell">
-      <Sidebar />
+      <Sidebar onOpenDemoPanel={() => setIsDemoPanelOpen(true)} />
+      <DemoPanel
+        open={isDemoPanelOpen}
+        onClose={() => setIsDemoPanelOpen(false)}
+        onAfterRun={() => loadDashboard({ silent: true })}
+      />
 
       <main className="content">
         <Header
