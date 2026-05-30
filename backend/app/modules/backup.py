@@ -3,19 +3,20 @@ import random
 import hashlib
 import time
 import boto3
-from datetime import datetime
-from fastapi import APIRouter
 
+from datetime import datetime
+from fastapi import APIRouter, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import BackupHistory
 
 
-router=APIRouter(
+router = APIRouter(
     prefix="/backup",
     tags=["Backup"]
 )
+
 
 def calculate_file_checksum(file_path: str):
     sha256 = hashlib.sha256()
@@ -28,20 +29,82 @@ def calculate_file_checksum(file_path: str):
 
 
 def create_hash(data):
-
     return hashlib.sha256(
         data.encode()
     ).hexdigest()
 
-def replicate_to_cloud(local_file_path, file_name):
 
+def normalize_s3_prefix(prefix: str):
+    if not prefix:
+        return ""
+
+    prefix = prefix.strip()
+
+    if not prefix:
+        return ""
+
+    return prefix.strip("/") + "/"
+
+
+def build_s3_key(file_name: str):
+    prefix = normalize_s3_prefix(
+        os.getenv("AWS_BACKUP_PREFIX", "")
+    )
+
+    return f"{prefix}{file_name}"
+
+
+def get_s3_client():
+    region = os.getenv(
+        "AWS_REGION",
+        "us-east-2"
+    )
+
+    return boto3.client(
+        "s3",
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        region_name=region
+    )
+
+
+def get_latest_s3_backup(s3, bucket: str, prefix: str = ""):
+    paginator = s3.get_paginator("list_objects_v2")
+
+    latest_object = None
+
+    for page in paginator.paginate(
+        Bucket=bucket,
+        Prefix=prefix
+    ):
+        for obj in page.get("Contents", []):
+            key = obj.get("Key", "")
+
+            if not key:
+                continue
+
+            if key.endswith("/"):
+                continue
+
+            if not key.endswith(".bak"):
+                continue
+
+            if obj.get("Size", 0) <= 0:
+                continue
+
+            if latest_object is None or obj["LastModified"] > latest_object["LastModified"]:
+                latest_object = obj
+
+    return latest_object
+
+
+def replicate_to_cloud(local_file_path, file_name):
     cloud_provider = os.getenv(
         "CLOUD_PROVIDER",
         "SIMULATED"
     ).upper()
 
     if cloud_provider == "AWS":
-
         bucket = os.getenv("AWS_BUCKET")
 
         region = os.getenv(
@@ -57,22 +120,19 @@ def replicate_to_cloud(local_file_path, file_name):
             }
 
         try:
-            s3 = boto3.client(
-                "s3",
-                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-                region_name=region
-            )
+            s3 = get_s3_client()
+
+            s3_key = build_s3_key(file_name)
 
             s3.upload_file(
                 local_file_path,
                 bucket,
-                file_name
+                s3_key
             )
 
             remote_object = s3.head_object(
                 Bucket=bucket,
-                Key=file_name
+                Key=s3_key
             )
 
             local_size = os.path.getsize(local_file_path)
@@ -87,7 +147,7 @@ def replicate_to_cloud(local_file_path, file_name):
 
             return {
                 "status": "SUCCESS",
-                "url": f"https://{bucket}.s3.{region}.amazonaws.com/{file_name}",
+                "url": f"https://{bucket}.s3.{region}.amazonaws.com/{s3_key}",
                 "error": None
             }
 
@@ -109,28 +169,28 @@ def replicate_to_cloud(local_file_path, file_name):
         "error": None
     }
 
+
 def simulate_backup(backup_type):
+    db: Session = SessionLocal()
 
-    db:Session=SessionLocal()
+    start = time.time()
 
-    start=time.time()
+    file_name = f"{backup_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
 
-    file_name=f"{backup_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
-
-    size=round(
-        random.uniform(50,300),
+    size = round(
+        random.uniform(50, 300),
         2
     )
 
     time.sleep(2)
 
-    duration=round(
-        time.time()-start,
+    duration = round(
+        time.time() - start,
         2
     )
 
-    restore=f"RP-{datetime.now()}"
-    
+    restore = f"RP-{datetime.now()}"
+
     backup_folder = "backups"
 
     os.makedirs(
@@ -161,22 +221,20 @@ def simulate_backup(backup_type):
         fake_cloud = f"CLOUD_REPLICATION_FAILED: {cloud_result['error']}"
     else:
         fake_cloud = cloud_result["url"]
-        
-    backup=BackupHistory(
-    backup_type=backup_type,
-    file_name=file_name,
-    size_mb=size,
-    duration_seconds=duration,
-    restore_point=restore,
-    snapshot_name=backup_type if backup_type in ["PRE_DEPLOY", "PRE_TEST", "PRE_IMPORT"] else None,
-    cloud_url=fake_cloud,
-    hash_value=hash_value
-)
+
+    backup = BackupHistory(
+        backup_type=backup_type,
+        file_name=file_name,
+        size_mb=size,
+        duration_seconds=duration,
+        restore_point=restore,
+        snapshot_name=backup_type if backup_type in ["PRE_DEPLOY", "PRE_TEST", "PRE_IMPORT"] else None,
+        cloud_url=fake_cloud,
+        hash_value=hash_value
+    )
 
     db.add(backup)
-
     db.commit()
-
     db.close()
 
     return {
@@ -190,21 +248,38 @@ def simulate_backup(backup_type):
     }
 
 
+def simulate_restore_response():
+    rpo_minutes = 15
+    rto_minutes = 45
+
+    simulated_rpo = random.randint(5, 20)
+    simulated_rto = random.randint(20, 60)
+
+    sla_compliance = simulated_rpo <= rpo_minutes and simulated_rto <= rto_minutes
+
+    return {
+        "message": "Restore process completed",
+        "restore_chain": "FULL -> DIFF -> INC",
+        "rpo_target_minutes": rpo_minutes,
+        "rto_target_minutes": rto_minutes,
+        "actual_rpo_minutes": simulated_rpo,
+        "actual_rto_minutes": simulated_rto,
+        "sla_compliance": "Sí" if sla_compliance else "No"
+    }
+
+
 @router.post("/full")
 def full_backup():
-
     return simulate_backup("FULL")
 
 
 @router.post("/diff")
 def diff_backup():
-
     return simulate_backup("DIFF")
 
 
 @router.post("/inc")
 def inc_backup():
-
     return simulate_backup("INC")
 
 
@@ -215,9 +290,7 @@ def history():
     data = db.query(
         BackupHistory
     ).filter(
-        BackupHistory.snapshot_name.is_(None)
-    ).order_by(
-        BackupHistory.created_at.desc()
+        BackupHistory.snapshot_name == None
     ).all()
 
     db.close()
@@ -232,9 +305,7 @@ def snapshots_history():
     data = db.query(
         BackupHistory
     ).filter(
-        BackupHistory.snapshot_name.isnot(None)
-    ).order_by(
-        BackupHistory.created_at.desc()
+        BackupHistory.snapshot_name != None
     ).all()
 
     db.close()
@@ -266,23 +337,128 @@ def simulate_disaster():
 
 @router.post("/restore")
 def restore_backup():
-    rpo_minutes = 15
-    rto_minutes = 45
+    cloud_provider = os.getenv(
+        "CLOUD_PROVIDER",
+        "SIMULATED"
+    ).upper()
 
-    simulated_rpo = random.randint(5, 20)
-    simulated_rto = random.randint(20, 60)
+    if cloud_provider != "AWS":
+        simulated_restore = simulate_restore_response()
 
-    sla_compliance = simulated_rpo <= rpo_minutes and simulated_rto <= rto_minutes
+        return {
+            **simulated_restore,
+            "source": "SIMULATED",
+            "note": "Para restaurar desde AWS configura CLOUD_PROVIDER=AWS en el .env"
+        }
 
-    return {
-        "message": "Restore process completed",
-        "restore_chain": "FULL -> DIFF -> INC",
-        "rpo_target_minutes": rpo_minutes,
-        "rto_target_minutes": rto_minutes,
-        "actual_rpo_minutes": simulated_rpo,
-        "actual_rto_minutes": simulated_rto,
-        "sla_compliance": "Sí" if sla_compliance else "No"
-    }
+    bucket = os.getenv("AWS_BUCKET")
+
+    if not bucket:
+        raise HTTPException(
+            status_code=500,
+            detail="AWS_BUCKET no está configurado en el archivo .env"
+        )
+
+    prefix = normalize_s3_prefix(
+        os.getenv("AWS_BACKUP_PREFIX", "")
+    )
+
+    restore_folder = os.getenv(
+        "RESTORE_FOLDER",
+        "restores"
+    )
+
+    os.makedirs(
+        restore_folder,
+        exist_ok=True
+    )
+
+    db = None
+
+    try:
+        s3 = get_s3_client()
+
+        latest_backup = get_latest_s3_backup(
+            s3=s3,
+            bucket=bucket,
+            prefix=prefix
+        )
+
+        if not latest_backup:
+            raise HTTPException(
+                status_code=404,
+                detail="No se encontraron backups .bak en el bucket de AWS S3"
+            )
+
+        object_key = latest_backup["Key"]
+
+        file_name = os.path.basename(object_key)
+
+        if not file_name:
+            file_name = object_key.replace("/", "_")
+
+        local_restore_path = os.path.join(
+            restore_folder,
+            file_name
+        )
+
+        s3.download_file(
+            bucket,
+            object_key,
+            local_restore_path
+        )
+
+        checksum = calculate_file_checksum(
+            local_restore_path
+        )
+
+        db = SessionLocal()
+
+        backup_record = db.query(
+            BackupHistory
+        ).filter(
+            BackupHistory.file_name == file_name
+        ).order_by(
+            BackupHistory.created_at.desc()
+        ).first()
+
+        checksum_status = "NO_LOCAL_HISTORY"
+
+        if backup_record:
+            if backup_record.hash_value == checksum:
+                checksum_status = "MATCHED"
+            else:
+                checksum_status = "MISMATCH"
+
+        restore_metrics = simulate_restore_response()
+
+        return {
+            **restore_metrics,
+            "status": "RESTORED",
+            "message": "Último backup de AWS restaurado correctamente.",
+            "source": "AWS S3",
+            "bucket": bucket,
+            "object_key": object_key,
+            "restored_file": file_name,
+            "local_restore_path": local_restore_path,
+            "size_bytes": latest_backup.get("Size"),
+            "s3_last_modified": str(latest_backup.get("LastModified")),
+            "checksum": checksum,
+            "checksum_status": checksum_status
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo restaurar el último backup desde AWS: {str(e)}"
+        )
+
+    finally:
+        if db:
+            db.close()
 
 
 @router.get("/retention-policy")
