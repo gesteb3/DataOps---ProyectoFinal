@@ -33,6 +33,7 @@ export async function loginRequest(username, password) {
 
 export const dashboardApi = {
   healthSummary: () => api.get("/health-summary"),
+  connections: () => api.get("/connections/databases"),
   performance: () => api.get("/bi/performance"),
   slowQueries: () => api.get("/bi/top-slow-queries"),
   backupSla: () => api.get("/bi/backup-sla"),

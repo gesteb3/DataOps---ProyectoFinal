@@ -9,6 +9,10 @@ const directEndpoints = [
   { label: "Restaurar backup", method: "POST", path: "/backup/restore" },
   { label: "Evaluar alertas", method: "POST", path: "/alerts/evaluate" },
   { label: "Simular replicación", method: "POST", path: "/replication/simulate" },
+  { label: "Lag normal 2s", method: "POST", path: "/replication/simulate/normal" },
+  { label: "Lag medio 5s", method: "POST", path: "/replication/simulate/media" },
+  { label: "Lag alto 20s", method: "POST", path: "/replication/simulate/alta" },
+  { label: "Medir lag real", method: "GET", path: "/replication/measure-real" },
   { label: "Backup full", method: "POST", path: "/backup/full" },
   { label: "Backup diferencial", method: "POST", path: "/backup/diff" },
   { label: "Backup incremental", method: "POST", path: "/backup/inc" },
@@ -43,6 +47,30 @@ const parameterizedEndpoints = [
   }
 ];
 
+const engineDefaults = {
+  PostgreSQL: {
+    nombre: "PostgreSQL Principal",
+    host: "postgres",
+    port: 5432,
+    database_name: "dataops_db",
+    user_name: "dataops"
+  },
+  "SQL Server": {
+    nombre: "SQL Server Producción",
+    host: "localhost",
+    port: 1433,
+    database_name: "master",
+    user_name: "sa"
+  },
+  Oracle: {
+    nombre: "Oracle Principal",
+    host: "localhost",
+    port: 1521,
+    database_name: "XEPDB1",
+    user_name: "system"
+  }
+};
+
 const initialConsole = {
   status: "idle",
   title: "Listo para ejecutar pruebas",
@@ -54,6 +82,14 @@ const initialConsole = {
 
 const defaultConnectionJson =
   '{"nombre":"PostgreSQL","motor":"PostgreSQL","host":"postgres","port":5432,"database_name":"dataops_db","user_name":"dataops","password":"dataops123"}';
+
+function buildInitialConnectionForm(motor = "PostgreSQL") {
+  return {
+    motor,
+    ...engineDefaults[motor],
+    password: ""
+  };
+}
 
 function buildPath(pathTemplate, inputName, value) {
   return pathTemplate.replace(`{${inputName}}`, encodeURIComponent(value.trim()));
@@ -92,6 +128,8 @@ function getErrorPayload(error) {
 function DemoPanel({ open, onClose, onAfterRun }) {
   const [consoleState, setConsoleState] = useState(initialConsole);
   const [runningKey, setRunningKey] = useState("");
+  const [isConnectionModalOpen, setIsConnectionModalOpen] = useState(false);
+  const [connectionForm, setConnectionForm] = useState(buildInitialConnectionForm());
 
   const [params, setParams] = useState({
     "invalidate-cache": "",
@@ -100,7 +138,6 @@ function DemoPanel({ open, onClose, onAfterRun }) {
   });
 
   const [connectionTestJson, setConnectionTestJson] = useState(defaultConnectionJson);
-  const [connectionRegisterJson, setConnectionRegisterJson] = useState(defaultConnectionJson);
 
   const isRunning = Boolean(runningKey);
 
@@ -113,12 +150,18 @@ function DemoPanel({ open, onClose, onAfterRun }) {
     if (!open) return undefined;
 
     const handleEscape = (event) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        if (isConnectionModalOpen) {
+          setIsConnectionModalOpen(false);
+        } else {
+          onClose();
+        }
+      }
     };
 
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [open, onClose]);
+  }, [open, onClose, isConnectionModalOpen]);
 
   const executeRequest = async ({ key, label, method, path, data }) => {
     const requestKey = key || `${method}-${path}`;
@@ -226,29 +269,38 @@ function DemoPanel({ open, onClose, onAfterRun }) {
     }
   };
 
-  const executeConnectionRegister = () => {
-    try {
-      const body = JSON.parse(connectionRegisterJson);
+  const updateConnectionField = (field, value) => {
+    setConnectionForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  };
 
-      executeRequest({
-        key: "connection-register",
-        label: "Registrar conexión",
-        method: "POST",
-        path: "/connections",
-        data: body
-      });
-    } catch {
-      setConsoleState({
-        status: "error",
-        title: "JSON inválido",
-        detail: "Revisa comillas, comas o llaves del body.",
-        method: "POST",
-        path: "/connections",
-        payload: {
-          error: "El body ingresado no tiene formato JSON válido."
-        }
-      });
-    }
+  const handleMotorChange = (motor) => {
+    setConnectionForm({
+      motor,
+      ...engineDefaults[motor],
+      password: ""
+    });
+  };
+
+  const submitConnectionForm = (event) => {
+    event.preventDefault();
+
+    const body = {
+      ...connectionForm,
+      port: Number(connectionForm.port)
+    };
+
+    executeRequest({
+      key: "connection-register-modal",
+      label: "Registrar nueva conexión",
+      method: "POST",
+      path: "/connections",
+      data: body
+    });
+
+    setIsConnectionModalOpen(false);
   };
 
   if (!open) return null;
@@ -282,6 +334,19 @@ function DemoPanel({ open, onClose, onAfterRun }) {
 
         <div className="demo-panel-body">
           <section className="demo-panel-section">
+            <h3>Registro de conexiones</h3>
+
+            <button
+              className="demo-primary-action"
+              type="button"
+              disabled={isRunning}
+              onClick={() => setIsConnectionModalOpen(true)}
+            >
+              Registrar Nueva Conexión
+            </button>
+          </section>
+
+          <section className="demo-panel-section">
             <h3>Endpoints directos</h3>
 
             <div className="demo-endpoint-list">
@@ -310,28 +375,7 @@ function DemoPanel({ open, onClose, onAfterRun }) {
             <div className="demo-param-list">
               <div className="demo-param-row">
                 <div>
-                  <strong>Registrar conexión</strong>
-                  <span>POST /connections</span>
-                </div>
-
-                <input
-                  value={connectionRegisterJson}
-                  placeholder='{"nombre":"PostgreSQL","motor":"PostgreSQL"...}'
-                  onChange={(event) => setConnectionRegisterJson(event.target.value)}
-                />
-
-                <button
-                  type="button"
-                  disabled={isRunning}
-                  onClick={executeConnectionRegister}
-                >
-                  Ejecutar
-                </button>
-              </div>
-
-              <div className="demo-param-row">
-                <div>
-                  <strong>Probar conexión</strong>
+                  <strong>Probar conexión con JSON</strong>
                   <span>POST /connections/test</span>
                 </div>
 
@@ -400,6 +444,110 @@ function DemoPanel({ open, onClose, onAfterRun }) {
           <pre>{formatPayload(consoleState.payload)}</pre>
         </footer>
       </aside>
+
+      {isConnectionModalOpen && (
+        <div className="connection-modal-layer" role="dialog" aria-modal="true">
+          <button
+            className="connection-modal-backdrop"
+            type="button"
+            aria-label="Cerrar modal de conexión"
+            onClick={() => setIsConnectionModalOpen(false)}
+          />
+
+          <form className="connection-modal" onSubmit={submitConnectionForm}>
+            <div className="connection-modal-header">
+              <div>
+                <span className="demo-panel-eyebrow">Módulo 1</span>
+                <h3>Registrar Nueva Conexión</h3>
+                <p>El backend probará la conexión real antes de guardar las credenciales cifradas.</p>
+              </div>
+              <button type="button" onClick={() => setIsConnectionModalOpen(false)}>×</button>
+            </div>
+
+            <label>
+              Tipo de Motor
+              <select
+                value={connectionForm.motor}
+                onChange={(event) => handleMotorChange(event.target.value)}
+              >
+                <option value="PostgreSQL">PostgreSQL</option>
+                <option value="SQL Server">SQL Server</option>
+                <option value="Oracle">Oracle</option>
+              </select>
+            </label>
+
+            <div className="connection-form-grid">
+              <label>
+                Nombre visible
+                <input
+                  value={connectionForm.nombre}
+                  onChange={(event) => updateConnectionField("nombre", event.target.value)}
+                  required
+                  minLength={3}
+                />
+              </label>
+
+              <label>
+                Host
+                <input
+                  value={connectionForm.host}
+                  onChange={(event) => updateConnectionField("host", event.target.value)}
+                  required
+                />
+              </label>
+
+              <label>
+                Puerto
+                <input
+                  type="number"
+                  value={connectionForm.port}
+                  onChange={(event) => updateConnectionField("port", event.target.value)}
+                  required
+                  min="1"
+                />
+              </label>
+
+              <label>
+                Nombre de BD / Service Name
+                <input
+                  value={connectionForm.database_name}
+                  onChange={(event) => updateConnectionField("database_name", event.target.value)}
+                  required
+                />
+              </label>
+
+              <label>
+                Usuario
+                <input
+                  value={connectionForm.user_name}
+                  onChange={(event) => updateConnectionField("user_name", event.target.value)}
+                  required
+                />
+              </label>
+
+              <label>
+                Contraseña
+                <input
+                  type="password"
+                  value={connectionForm.password}
+                  onChange={(event) => updateConnectionField("password", event.target.value)}
+                  required
+                  minLength={4}
+                />
+              </label>
+            </div>
+
+            <div className="connection-modal-actions">
+              <button type="button" className="btn btn-ghost" onClick={() => setIsConnectionModalOpen(false)}>
+                Cancelar
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={isRunning}>
+                Probar y guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

@@ -39,8 +39,10 @@ def performance_timeline():
 
     return [
         {
+            "connection_id": connection.id,
             "engine": connection.nombre,
             "motor": connection.motor,
+            "database_name": connection.database_name,
             "cpu": metric.cpu,
             "connections": metric.connections,
             "locks": metric.locks,
@@ -92,20 +94,35 @@ def top_slow_queries():
 
     queries = db.query(
         QueryLog.query_text,
+        Connection.id.label("connection_id"),
+        Connection.nombre.label("engine"),
+        Connection.motor.label("motor"),
+        Connection.database_name.label("database_name"),
         func.avg(QueryLog.duration_ms).label("average_duration"),
         func.max(QueryLog.duration_ms).label("max_duration"),
         func.count(QueryLog.id).label("executions")
+    ).join(
+        Connection,
+        QueryLog.connection_id == Connection.id
     ).group_by(
-        QueryLog.query_text
+        QueryLog.query_text,
+        Connection.id,
+        Connection.nombre,
+        Connection.motor,
+        Connection.database_name
     ).order_by(
         func.avg(QueryLog.duration_ms).desc()
-    ).limit(10).all()
+    ).limit(20).all()
 
     db.close()
 
     return [
         {
             "query_text": query.query_text,
+            "connection_id": query.connection_id,
+            "engine": query.engine,
+            "motor": query.motor,
+            "database_name": query.database_name,
             "average_duration_ms": round(query.average_duration, 2),
             "max_duration_ms": query.max_duration,
             "executions": query.executions,
@@ -242,8 +259,10 @@ def global_availability():
 
         result.append(
             {
+                "connection_id": connection.id,
                 "engine": connection.nombre,
                 "motor": connection.motor,
+                "database_name": connection.database_name,
                 "status": connection.status,
                 "availability_percentage": availability,
                 "target_percentage": 99.9,

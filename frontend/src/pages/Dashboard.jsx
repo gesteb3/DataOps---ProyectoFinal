@@ -23,6 +23,7 @@ import DemoPanel from "../components/DemoPanel";
 
 const initialData = {
   health: null,
+  connections: [],
   performance: [],
   slowQueries: [],
   backupSla: null,
@@ -39,6 +40,7 @@ const initialData = {
 const AUTO_REFRESH_MS = 10000;
 const endpointConfig = [
   ["health", dashboardApi.healthSummary],
+  ["connections", dashboardApi.connections],
   ["performance", dashboardApi.performance],
   ["slowQueries", dashboardApi.slowQueries],
   ["backupSla", dashboardApi.backupSla],
@@ -141,12 +143,55 @@ function getAverageAvailabilityByEngine(items = []) {
     })
     .filter(Boolean);
 }
+
+function matchesGlobalFilter(item, globalFilter) {
+  const selectedMotor = globalFilter?.motor || "Todos";
+  const selectedDatabase = globalFilter?.databaseName || "Todas";
+
+  const itemMotor = normalizeEngineName(
+    item.motor ||
+    item.engine_type ||
+    item.database_type ||
+    item.engine ||
+    item.nombre ||
+    ""
+  );
+
+  const itemDatabase = item.database_name || item.databaseName || item.db_name || "";
+
+  const motorMatches = selectedMotor === "Todos" || itemMotor === selectedMotor;
+  const databaseMatches = selectedDatabase === "Todas" || itemDatabase === selectedDatabase;
+
+  return motorMatches && databaseMatches;
+}
+
+function getDatabaseOptions(connections = [], selectedMotor = "Todos") {
+  const options = new Set();
+
+  connections.forEach((connection) => {
+    const connectionMotor = normalizeEngineName(connection.motor || "");
+
+    if (selectedMotor !== "Todos" && connectionMotor !== selectedMotor) {
+      return;
+    }
+
+    if (connection.database_name) {
+      options.add(connection.database_name);
+    }
+  });
+
+  return [...options].sort((a, b) => a.localeCompare(b));
+}
 function Dashboard({ onLogout }) {
   const [data, setData] = useState(initialData);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(true);
   const [actionMessage, setActionMessage] = useState("");
   const [isDemoPanelOpen, setIsDemoPanelOpen] = useState(false);
+  const [globalFilter, setGlobalFilter] = useState({
+    motor: "Todos",
+    databaseName: "Todas"
+  });
 
   const loadDashboard = async ({ silent = false } = {}) => {
     if (!silent) {
@@ -199,15 +244,41 @@ function Dashboard({ onLogout }) {
     return () => window.clearInterval(intervalId);
   }, []);
 
+  const filteredConnections = useMemo(
+    () => (data.connections || []).filter((item) => matchesGlobalFilter(item, globalFilter)),
+    [data.connections, globalFilter]
+  );
+
+  const databaseOptions = useMemo(
+    () => getDatabaseOptions(data.connections || [], globalFilter.motor),
+    [data.connections, globalFilter.motor]
+  );
+
+  const filteredPerformanceRows = useMemo(
+    () => (data.performance || []).filter((item) => matchesGlobalFilter(item, globalFilter)),
+    [data.performance, globalFilter]
+  );
+
   const performance = useMemo(
-    () => [...(data.performance || [])].reverse().slice(-25),
-    [data.performance]
+    () => [...filteredPerformanceRows].reverse().slice(-25),
+    [filteredPerformanceRows]
+  );
+
+  const filteredAvailabilityRows = useMemo(
+    () => (data.availability || []).filter((item) => matchesGlobalFilter(item, globalFilter)),
+    [data.availability, globalFilter]
   );
 
   const availability = useMemo(
-    () => getAverageAvailabilityByEngine(data.availability || []),
-    [data.availability]
+    () => getAverageAvailabilityByEngine(filteredAvailabilityRows),
+    [filteredAvailabilityRows]
   );
+
+  const filteredSlowQueries = useMemo(
+    () => (data.slowQueries || []).filter((item) => matchesGlobalFilter(item, globalFilter)),
+    [data.slowQueries, globalFilter]
+  );
+
   const replicationLag = useMemo(
     () => [...(data.replicationLag || [])].reverse().slice(-12),
     [data.replicationLag]
@@ -243,6 +314,9 @@ function Dashboard({ onLogout }) {
           onLogout={onLogout}
           onResolveAll={handleResolveAllAlerts}
           pendingAlerts={pendingAlerts.length}
+          globalFilter={globalFilter}
+          databaseOptions={databaseOptions}
+          onFilterChange={setGlobalFilter}
         />
 
         {actionMessage && <div className="action-message">{actionMessage}</div>}
@@ -259,10 +333,10 @@ function Dashboard({ onLogout }) {
         )}
 
         <section className="stats-grid" id="overview">
-          <StatCard title="Motores registrados" value={data.health?.registered_engines ?? 0} subtitle="Conexiones configuradas" icon="DB" />
+          <StatCard title="Motores registrados" value={globalFilter.motor === "Todos" && globalFilter.databaseName === "Todas" ? data.health?.registered_engines ?? 0 : filteredConnections.length} subtitle="Conexiones configuradas" icon="DB" />
           <StatCard title="Métricas capturadas" value={data.health?.captured_metrics ?? 0} subtitle={data.health?.status ?? "Sin estado"} tone="purple" icon="M" />
-          <StatCard title="CPU actual" value={`${data.health?.latest_cpu ?? latestMetric.cpu ?? 0}%`} subtitle="Última métrica registrada" tone="orange" icon="CPU" />
-          <StatCard title="Disco actual" value={`${data.health?.latest_disk_usage ?? latestMetric.disk_usage ?? 0}%`} subtitle="Uso de almacenamiento" tone="green" icon="HD" />
+          <StatCard title="CPU actual" value={`${latestMetric.cpu ?? data.health?.latest_cpu ?? 0}%`} subtitle="Última métrica según filtro" tone="orange" icon="CPU" />
+          <StatCard title="Disco actual" value={`${latestMetric.disk_usage ?? data.health?.latest_disk_usage ?? 0}%`} subtitle="Uso según filtro" tone="green" icon="HD" />
           <StatCard title="SLA Backups" value={data.backupSla?.sla_compliance ?? "No"} subtitle={`RPO ${data.backupSla?.rpo_target_minutes ?? 15} min / RTO ${data.backupSla?.rto_target_minutes ?? 45} min`} tone="blue" icon="SLA" />
           <StatCard title="Cache Hit Rate" value={`${cacheHitRate}%`} subtitle={`${cacheHits} hits / ${cacheMisses} misses`} tone="green" icon="R" />
           <StatCard title="Alertas pendientes" value={pendingAlerts.length} subtitle={`${criticalAlerts.length} críticas`} tone={pendingAlerts.length ? "red" : "green"} icon="!" />
@@ -317,7 +391,7 @@ function Dashboard({ onLogout }) {
           <ChartCard title="Top queries lentas" subtitle="+" error={errors.slowQueries} loading={loading}>
             <DataTable
               compact
-              rows={(data.slowQueries || []).slice(0, 10)}
+              rows={filteredSlowQueries.slice(0, 10)}
               columns={[
                 { key: "query_text", label: "Consulta", render: (row) => <span className="query-text">{row.query_text}</span> },
                 { key: "average_duration_ms", label: "Prom. ms" },
