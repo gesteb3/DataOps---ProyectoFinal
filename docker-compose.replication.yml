@@ -1,0 +1,66 @@
+services:
+  postgres_primary:
+    image: postgres:16
+    container_name: dataops_postgres_primary
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dataops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dataops123}
+      POSTGRES_DB: ${POSTGRES_DB:-dataops_db}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-replica123}
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "hot_standby=on"
+      - "-c"
+      - "listen_addresses=*"
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./backend/replication/init-primary:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dataops} -d ${POSTGRES_DB:-dataops_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgres_replica:
+    image: postgres:16
+    container_name: dataops_postgres_replica
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dataops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dataops123}
+      POSTGRES_DB: ${POSTGRES_DB:-dataops_db}
+      PGPASSWORD: ${REPLICATION_PASSWORD:-replica123}
+    command: >
+      bash -c "
+      until pg_isready -h postgres_primary -p 5432 -U ${POSTGRES_USER:-dataops}; do sleep 2; done;
+      rm -rf /var/lib/postgresql/data/*;
+      pg_basebackup -h postgres_primary -p 5432 -D /var/lib/postgresql/data -U replicator -v -P --wal-method=stream;
+      echo \"primary_conninfo = 'host=postgres_primary port=5432 user=replicator password=${REPLICATION_PASSWORD:-replica123}'\" >> /var/lib/postgresql/data/postgresql.auto.conf;
+      touch /var/lib/postgresql/data/standby.signal;
+      chown -R postgres:postgres /var/lib/postgresql/data;
+      exec docker-entrypoint.sh postgres
+      "
+    ports:
+      - "5434:5432"
+    depends_on:
+      postgres_primary:
+        condition: service_healthy
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dataops} -d ${POSTGRES_DB:-dataops_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_primary_data:
+  postgres_replica_data:
