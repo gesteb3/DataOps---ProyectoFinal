@@ -139,7 +139,7 @@ def db_test():
 def create_connection(
     connection: ConnectionCreate,
     validate_connection: bool = Query(
-        False,
+        True,
         description="Si es true, prueba la conexión real antes de registrar el motor."
     ),
     current_user=Depends(get_current_user)
@@ -159,7 +159,17 @@ def create_connection(
                 user_name=connection.user_name,
                 password=connection.password,
             )
-            status_value = "ONLINE" if connection_test.get("status") == "connected" else "ERROR"
+
+            if connection_test.get("status") != "connected":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "message": "No se registró la conexión porque la prueba real falló.",
+                        "connection_test": connection_test
+                    }
+                )
+
+            status_value = "ONLINE"
 
         new_connection = Connection(
             nombre=connection.nombre,
@@ -179,7 +189,7 @@ def create_connection(
         db.refresh(new_connection)
 
         return {
-            "message": "Motor registrado correctamente",
+            "message": "Motor registrado correctamente con credenciales cifradas",
             "connection_id": new_connection.id,
             "status": new_connection.status,
             "connection_test": connection_test
@@ -268,6 +278,38 @@ def get_connections(
     db.close()
 
     return connections
+
+
+@app.get("/connections/databases")
+def get_connection_databases(
+    motor: str | None = Query(None),
+    current_user=Depends(get_current_user)
+):
+
+    db: Session = SessionLocal()
+
+    query = db.query(Connection)
+
+    if motor:
+        query = query.filter(Connection.motor == motor)
+
+    rows = query.order_by(
+        Connection.motor.asc(),
+        Connection.database_name.asc()
+    ).all()
+
+    db.close()
+
+    return [
+        {
+            "connection_id": row.id,
+            "nombre": row.nombre,
+            "motor": row.motor,
+            "database_name": row.database_name,
+            "status": row.status
+        }
+        for row in rows
+    ]
 
 
 @app.get("/metrics")

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.models import BackupHistory
+from app.services.s3_backup_service import upload_backup_to_s3, find_latest_backup_in_s3
 
 
 router = APIRouter(
@@ -98,74 +99,39 @@ def get_latest_s3_backup(s3, bucket: str, prefix: str = ""):
     return latest_object
 
 
-def replicate_to_cloud(local_file_path, file_name):
+def replicate_to_cloud(local_file_path, file_name, backup_type):
     cloud_provider = os.getenv(
         "CLOUD_PROVIDER",
         "SIMULATED"
     ).upper()
 
     if cloud_provider == "AWS":
-        bucket = os.getenv("AWS_BUCKET")
-
-        region = os.getenv(
-            "AWS_REGION",
-            "us-east-2"
+        return upload_backup_to_s3(
+            local_file_path=local_file_path,
+            backup_type=backup_type,
+            file_name=file_name
         )
-
-        if not bucket:
-            return {
-                "status": "FAILED",
-                "url": None,
-                "error": "AWS_BUCKET no está configurado"
-            }
-
-        try:
-            s3 = get_s3_client()
-
-            s3_key = build_s3_key(file_name)
-
-            s3.upload_file(
-                local_file_path,
-                bucket,
-                s3_key
-            )
-
-            remote_object = s3.head_object(
-                Bucket=bucket,
-                Key=s3_key
-            )
-
-            local_size = os.path.getsize(local_file_path)
-            remote_size = remote_object.get("ContentLength", 0)
-
-            if local_size != remote_size:
-                return {
-                    "status": "FAILED",
-                    "url": None,
-                    "error": "El tamaño del archivo en S3 no coincide con el archivo local"
-                }
-
-            return {
-                "status": "SUCCESS",
-                "url": f"https://{bucket}.s3.{region}.amazonaws.com/{s3_key}",
-                "error": None
-            }
-
-        except Exception as e:
-            return {
-                "status": "FAILED",
-                "url": None,
-                "error": str(e)
-            }
 
     cloud_bucket = os.getenv(
         "CLOUD_BUCKET",
         "dataops-backups"
     )
 
+    simulated_folder_map = {
+        "FULL": "full",
+        "DIFF": "diff",
+        "INC": "inc",
+        "PRE_DEPLOY": "pre_deploy",
+        "PRE_TEST": "pre_test",
+        "PRE_IMPORT": "pre_import"
+    }
+    folder = simulated_folder_map.get(backup_type, "unknown")
+
     return {
         "status": "SIMULATED",
-        "url": f"https://simulated-storage/{cloud_bucket}/{file_name}",
+        "url": f"https://simulated-storage/{cloud_bucket}/{folder}/{file_name}",
+        "s3_key": f"{folder}/{file_name}",
+        "folder": folder,
         "error": None
     }
 
@@ -214,7 +180,8 @@ def simulate_backup(backup_type):
 
     cloud_result = replicate_to_cloud(
         local_file_path,
-        file_name
+        file_name,
+        backup_type
     )
 
     if cloud_result["status"] == "FAILED":
@@ -244,6 +211,8 @@ def simulate_backup(backup_type):
         "duration_seconds": duration,
         "cloud_status": cloud_result["status"],
         "cloud": fake_cloud,
+        "s3_key": cloud_result.get("s3_key"),
+        "s3_folder": cloud_result.get("folder"),
         "checksum": hash_value
     }
 
@@ -378,11 +347,7 @@ def restore_backup():
     try:
         s3 = get_s3_client()
 
-        latest_backup = get_latest_s3_backup(
-            s3=s3,
-            bucket=bucket,
-            prefix=prefix
-        )
+        latest_backup = find_latest_backup_in_s3()
 
         if not latest_backup:
             raise HTTPException(
