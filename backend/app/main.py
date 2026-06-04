@@ -2,12 +2,14 @@ from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 import psycopg2
-from app.config import settings
-from sqlalchemy.orm import Session
 
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.config import settings
 from app.database import engine
 from app.database import SessionLocal
-from app.models import Base, Connection, DBMetric, QueryLog, BackupHistory, User, JobAudit
+from app.models import Base, Connection, DBMetric, QueryLog, User, JobAudit
 from app.schemas import ConnectionCreate, QueryLogCreate, LoginData
 from app.security import decrypt_password, encrypt_password
 from app.scheduler import scheduler
@@ -26,6 +28,7 @@ app = FastAPI(
     version="1.0"
 )
 
+
 def get_db():
     db = SessionLocal()
 
@@ -33,6 +36,7 @@ def get_db():
         yield db
     finally:
         db.close()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,15 +83,32 @@ app.include_router(
 scheduler.start()
 
 
+def serialize_connection(connection: Connection) -> dict:
+    return {
+        "id": connection.id,
+        "nombre": connection.nombre,
+        "motor": connection.motor,
+        "host": connection.host,
+        "port": connection.port,
+        "database_name": connection.database_name,
+        "user_name": connection.user_name,
+        "status": connection.status,
+        "created_at": connection.created_at,
+        "password_saved": bool(connection.encrypted_password),
+    }
+
+
 def classify_query(duration_ms: int):
     if duration_ms < 100:
         return "Fast"
-    elif duration_ms <= 500:
+
+    if duration_ms <= 500:
         return "Medium"
-    elif duration_ms <= 2000:
+
+    if duration_ms <= 2000:
         return "Slow"
-    else:
-        return "Critical"
+
+    return "Critical"
 
 
 @app.get("/")
@@ -128,10 +149,10 @@ def db_test():
             "version": db_version[0]
         }
 
-    except Exception as e:
+    except Exception as exc:
         return {
             "status": "error",
-            "message": str(e)
+            "message": str(exc)
         }
 
 
@@ -142,35 +163,36 @@ def create_connection(
         True,
         description="Si es true, prueba la conexión real antes de registrar el motor."
     ),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-
-    db: Session = SessionLocal()
     connection_test = None
-    status_value = "ONLINE"
+    status_value = "PENDING"
 
-    try:
-        if validate_connection:
-            connection_test = test_database_connection(
-                motor=connection.motor,
-                host=connection.host,
-                port=connection.port,
-                database_name=connection.database_name,
-                user_name=connection.user_name,
-                password=connection.password,
+    if validate_connection:
+        connection_test = test_database_connection(
+            motor=connection.motor,
+            host=connection.host,
+            port=connection.port,
+            database_name=connection.database_name,
+            user_name=connection.user_name,
+            password=connection.password,
+        )
+
+        if connection_test.get("status") != "connected":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "message": "No se registró la conexión porque la prueba real falló.",
+                    "connection_test": connection_test
+                }
             )
 
-            if connection_test.get("status") != "connected":
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "message": "No se registró la conexión porque la prueba real falló.",
-                        "connection_test": connection_test
-                    }
-                )
+        status_value = "ONLINE"
+    else:
+        status_value = "UNKNOWN"
 
-            status_value = "ONLINE"
-
+    try:
         new_connection = Connection(
             nombre=connection.nombre,
             motor=connection.motor,
@@ -178,9 +200,7 @@ def create_connection(
             port=connection.port,
             database_name=connection.database_name,
             user_name=connection.user_name,
-            encrypted_password=encrypt_password(
-                connection.password
-            ),
+            encrypted_password=encrypt_password(connection.password),
             status=status_value
         )
 
@@ -189,14 +209,18 @@ def create_connection(
         db.refresh(new_connection)
 
         return {
-            "message": "Motor registrado correctamente con credenciales cifradas",
-            "connection_id": new_connection.id,
-            "status": new_connection.status,
+            "message": "Motor registrado correctamente con credenciales cifradas.",
+            "connection": serialize_connection(new_connection),
             "connection_test": connection_test
         }
 
-    finally:
-        db.close()
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"No se pudo guardar la conexión: {str(exc)}"
+        ) from exc
 
 
 @app.post("/connections/test")
@@ -217,132 +241,170 @@ def test_connection_direct(
 @app.post("/connections/{connection_id}/test")
 def test_saved_connection(
     connection_id: int,
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-    db: Session = SessionLocal()
+    saved_connection = db.query(Connection).filter(
+        Connection.id == connection_id
+    ).first()
 
-    try:
-        saved_connection = db.query(Connection).filter(Connection.id == connection_id).first()
-
-        if not saved_connection:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Motor no encontrado"
-            )
-
-        try:
-            plain_password = decrypt_password(saved_connection.encrypted_password)
-        except ValueError as exc:
-            saved_connection.status = "ERROR"
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(exc)
-            )
-
-        result = test_database_connection(
-            motor=saved_connection.motor,
-            host=saved_connection.host,
-            port=saved_connection.port,
-            database_name=saved_connection.database_name,
-            user_name=saved_connection.user_name,
-            password=plain_password,
+    if not saved_connection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Motor no encontrado"
         )
 
-        saved_connection.status = "ONLINE" if result.get("status") == "connected" else "ERROR"
+    try:
+        plain_password = decrypt_password(saved_connection.encrypted_password)
+
+    except ValueError as exc:
+        saved_connection.status = "ERROR"
         db.commit()
 
-        return {
-            "connection_id": saved_connection.id,
-            "nombre": saved_connection.nombre,
-            "motor": saved_connection.motor,
-            "status": saved_connection.status,
-            "connection_test": result
-        }
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc)
+        ) from exc
 
-    finally:
-        db.close()
+    result = test_database_connection(
+        motor=saved_connection.motor,
+        host=saved_connection.host,
+        port=saved_connection.port,
+        database_name=saved_connection.database_name,
+        user_name=saved_connection.user_name,
+        password=plain_password,
+    )
+
+    saved_connection.status = "ONLINE" if result.get("status") == "connected" else "ERROR"
+    db.commit()
+    db.refresh(saved_connection)
+
+    return {
+        "connection": serialize_connection(saved_connection),
+        "connection_test": result
+    }
 
 
 @app.get("/connections")
 def get_connections(
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-
-    db: Session = SessionLocal()
-
-    connections = db.query(
-        Connection
+    connections = db.query(Connection).order_by(
+        Connection.id.asc()
     ).all()
 
-    db.close()
-
-    return connections
+    return [
+        serialize_connection(connection)
+        for connection in connections
+    ]
 
 
 @app.get("/connections/databases")
 def get_connection_databases(
     motor: str | None = Query(None),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-
-    db: Session = SessionLocal()
-
     query = db.query(Connection)
 
-    if motor:
+    if motor and motor != "Todos":
         query = query.filter(Connection.motor == motor)
 
-    rows = query.order_by(
+    connections = query.order_by(
         Connection.motor.asc(),
         Connection.database_name.asc()
     ).all()
 
-    db.close()
-
     return [
         {
-            "connection_id": row.id,
-            "nombre": row.nombre,
-            "motor": row.motor,
-            "database_name": row.database_name,
-            "status": row.status
+            "connection_id": connection.id,
+            "id": connection.id,
+            "nombre": connection.nombre,
+            "motor": connection.motor,
+            "host": connection.host,
+            "port": connection.port,
+            "database_name": connection.database_name,
+            "user_name": connection.user_name,
+            "status": connection.status
         }
-        for row in rows
+        for connection in connections
     ]
+
+
+@app.delete("/connections/{connection_id}")
+def delete_connection(
+    connection_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    saved_connection = db.query(Connection).filter(
+        Connection.id == connection_id
+    ).first()
+
+    if not saved_connection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Motor no encontrado"
+        )
+
+    try:
+        deleted_metrics = db.query(DBMetric).filter(
+            DBMetric.connection_id == connection_id
+        ).delete(
+            synchronize_session=False
+        )
+
+        deleted_queries = db.query(QueryLog).filter(
+            QueryLog.connection_id == connection_id
+        ).delete(
+            synchronize_session=False
+        )
+
+        connection_name = saved_connection.nombre
+
+        db.delete(saved_connection)
+        db.commit()
+
+        return {
+            "message": "Conexión eliminada correctamente.",
+            "connection_id": connection_id,
+            "connection_name": connection_name,
+            "deleted_related_records": {
+                "metrics": deleted_metrics,
+                "query_logs": deleted_queries
+            }
+        }
+
+    except SQLAlchemyError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"No se pudo eliminar la conexión: {str(exc)}"
+        ) from exc
 
 
 @app.get("/metrics")
 def get_metrics(
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-
-    db: Session = SessionLocal()
-
-    metrics = db.query(
-        DBMetric
-    ).all()
-
-    db.close()
-
+    metrics = db.query(DBMetric).all()
     return metrics
 
 
 @app.get("/health-summary")
 def health_summary(
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-
-    db: Session = SessionLocal()
-
     total_connections = db.query(Connection).count()
     total_metrics = db.query(DBMetric).count()
 
     latest_metric = db.query(DBMetric).order_by(
         DBMetric.capture_time.desc()
     ).first()
-
-    db.close()
 
     return {
         "registered_engines": total_connections,
@@ -353,6 +415,7 @@ def health_summary(
         "status": "monitoring_active"
     }
 
+
 @app.get("/jobs/audit")
 def get_job_audit(
     current_user=Depends(get_current_user),
@@ -362,14 +425,13 @@ def get_job_audit(
         JobAudit.start_time.desc()
     ).limit(100).all()
 
+
 @app.post("/queries")
 def create_query_log(
     query: QueryLogCreate,
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-
-    db: Session = SessionLocal()
-
     new_query = QueryLog(
         connection_id=query.connection_id,
         query_text=query.query_text,
@@ -384,8 +446,6 @@ def create_query_log(
     db.commit()
     db.refresh(new_query)
 
-    db.close()
-
     return {
         "message": "Consulta registrada correctamente",
         "classification": new_query.classification,
@@ -395,112 +455,97 @@ def create_query_log(
 
 @app.get("/queries")
 def get_query_logs(
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
-
-    db: Session = SessionLocal()
-
     queries = db.query(QueryLog).all()
-
-    db.close()
-
     return queries
 
 
 @app.post("/login")
 def login(user: LoginData):
-
     db: Session = SessionLocal()
 
-    existing_user = db.query(
-        User
-    ).filter(
-        User.username == user.username
-    ).first()
+    try:
+        existing_user = db.query(User).filter(
+            User.username == user.username
+        ).first()
 
-    if not existing_user:
+        if not existing_user:
+            demo_user = User(
+                username="admin",
+                password="admin123"
+            )
 
-        demo_user = User(
-            username="admin",
-            password="admin123"
+            db.add(demo_user)
+            db.commit()
+            db.refresh(demo_user)
+
+            existing_user = demo_user
+
+        if existing_user.password != user.password:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Credenciales inválidas"
+            )
+
+        token = create_access_token(
+            {
+                "sub": existing_user.username
+            }
         )
 
-        db.add(demo_user)
-        db.commit()
-        db.refresh(demo_user)
-
-        existing_user = demo_user
-
-    if existing_user.password != user.password:
-
-        db.close()
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales inválidas"
-        )
-
-    token = create_access_token(
-        {
-            "sub": existing_user.username
+        return {
+            "access_token": token,
+            "token_type": "bearer"
         }
-    )
 
-    db.close()
-
-    return {
-        "access_token": token,
-        "token_type": "bearer"
-    }
+    finally:
+        db.close()
 
 
 @app.post("/token")
 def token_login(
     form_data: OAuth2PasswordRequestForm = Depends()
 ):
-
     db: Session = SessionLocal()
 
-    existing_user = db.query(
-        User
-    ).filter(
-        User.username == form_data.username
-    ).first()
+    try:
+        existing_user = db.query(User).filter(
+            User.username == form_data.username
+        ).first()
 
-    if not existing_user:
+        if not existing_user:
+            demo_user = User(
+                username="admin",
+                password="admin123"
+            )
 
-        demo_user = User(
-            username="admin",
-            password="admin123"
-        )
+            db.add(demo_user)
+            db.commit()
+            db.refresh(demo_user)
 
-        db.add(demo_user)
-        db.commit()
-        db.refresh(demo_user)
+            existing_user = demo_user
 
-        existing_user = demo_user
+        if existing_user.password != form_data.password:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Credenciales inválidas",
+                headers={
+                    "WWW-Authenticate": "Bearer"
+                }
+            )
 
-    if existing_user.password != form_data.password:
-
-        db.close()
-
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales inválidas",
-            headers={
-                "WWW-Authenticate": "Bearer"
+        token = create_access_token(
+            {
+                "sub": existing_user.username
             }
         )
 
-    token = create_access_token(
-        {
-            "sub": existing_user.username
+        return {
+            "access_token": token,
+            "token_type": "bearer"
         }
-    )
 
-    db.close()
-
-    return {
-        "access_token": token,
-        "token_type": "bearer"
-    }
+    finally:
+        db.close()

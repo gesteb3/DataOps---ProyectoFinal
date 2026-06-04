@@ -1,6 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, API_URL } from "../api/client";
 
+const ENGINE_CONFIG = {
+  PostgreSQL: {
+    label: "PostgreSQL",
+    port: 5432,
+    hostPlaceholder: "postgres o localhost",
+    dbPlaceholder: "dataops_db",
+    userPlaceholder: "dataops"
+  },
+  "SQL Server": {
+    label: "SQL Server",
+    port: 1433,
+    hostPlaceholder: "host.docker.internal o IP del servidor",
+    dbPlaceholder: "master",
+    userPlaceholder: "sa"
+  },
+  Oracle: {
+    label: "Oracle",
+    port: 1521,
+    hostPlaceholder: "host.docker.internal o IP del servidor",
+    dbPlaceholder: "XEPDB1 o ORCLPDB1",
+    userPlaceholder: "system"
+  }
+};
+
 const directEndpoints = [
   { label: "Simular concurrencia", method: "POST", path: "/concurrency/simulate" },
   { label: "Deadlock real PostgreSQL", method: "POST", path: "/concurrency/real-deadlock-postgres" },
@@ -8,11 +32,9 @@ const directEndpoints = [
   { label: "Simular desastre", method: "POST", path: "/backup/simulate-disaster" },
   { label: "Restaurar backup", method: "POST", path: "/backup/restore" },
   { label: "Evaluar alertas", method: "POST", path: "/alerts/evaluate" },
-  { label: "Simular replicación", method: "POST", path: "/replication/simulate" },
-  { label: "Lag normal 2s", method: "POST", path: "/replication/simulate/normal" },
-  { label: "Lag medio 5s", method: "POST", path: "/replication/simulate/media" },
-  { label: "Lag alto 20s", method: "POST", path: "/replication/simulate/alta" },
-  { label: "Medir lag real", method: "GET", path: "/replication/measure-real" },
+  { label: "Replicación normal 2s", method: "POST", path: "/replication/simulate/normal" },
+  { label: "Replicación media 5s", method: "POST", path: "/replication/simulate/media" },
+  { label: "Replicación alta 20s", method: "POST", path: "/replication/simulate/alta" },
   { label: "Backup full", method: "POST", path: "/backup/full" },
   { label: "Backup diferencial", method: "POST", path: "/backup/diff" },
   { label: "Backup incremental", method: "POST", path: "/backup/inc" },
@@ -31,9 +53,17 @@ const parameterizedEndpoints = [
   },
   {
     key: "test-connection-by-id",
-    label: "Probar conexión por ID",
+    label: "Probar conexión guardada por ID",
     method: "POST",
     pathTemplate: "/connections/{connection_id}/test",
+    inputName: "connection_id",
+    placeholder: "connection_id"
+  },
+  {
+    key: "delete-connection-by-id",
+    label: "Eliminar conexión por ID",
+    method: "DELETE",
+    pathTemplate: "/connections/{connection_id}",
     inputName: "connection_id",
     placeholder: "connection_id"
   },
@@ -47,30 +77,6 @@ const parameterizedEndpoints = [
   }
 ];
 
-const engineDefaults = {
-  PostgreSQL: {
-    nombre: "PostgreSQL Principal",
-    host: "postgres",
-    port: 5432,
-    database_name: "dataops_db",
-    user_name: "dataops"
-  },
-  "SQL Server": {
-    nombre: "SQL Server Producción",
-    host: "localhost",
-    port: 1433,
-    database_name: "master",
-    user_name: "sa"
-  },
-  Oracle: {
-    nombre: "Oracle Principal",
-    host: "localhost",
-    port: 1521,
-    database_name: "XEPDB1",
-    user_name: "system"
-  }
-};
-
 const initialConsole = {
   status: "idle",
   title: "Listo para ejecutar pruebas",
@@ -80,16 +86,15 @@ const initialConsole = {
   payload: null
 };
 
-const defaultConnectionJson =
-  '{"nombre":"PostgreSQL","motor":"PostgreSQL","host":"postgres","port":5432,"database_name":"dataops_db","user_name":"dataops","password":"dataops123"}';
-
-function buildInitialConnectionForm(motor = "PostgreSQL") {
-  return {
-    motor,
-    ...engineDefaults[motor],
-    password: ""
-  };
-}
+const initialConnectionForm = {
+  nombre: "PostgreSQL Local",
+  motor: "PostgreSQL",
+  host: "postgres",
+  port: 5432,
+  database_name: "dataops_db",
+  user_name: "dataops",
+  password: "dataops123"
+};
 
 function buildPath(pathTemplate, inputName, value) {
   return pathTemplate.replace(`{${inputName}}`, encodeURIComponent(value.trim()));
@@ -128,18 +133,20 @@ function getErrorPayload(error) {
 function DemoPanel({ open, onClose, onAfterRun }) {
   const [consoleState, setConsoleState] = useState(initialConsole);
   const [runningKey, setRunningKey] = useState("");
-  const [isConnectionModalOpen, setIsConnectionModalOpen] = useState(false);
-  const [connectionForm, setConnectionForm] = useState(buildInitialConnectionForm());
+  const [showConnectionModal, setShowConnectionModal] = useState(false);
+  const [connectionForm, setConnectionForm] = useState(initialConnectionForm);
+  const [savedConnections, setSavedConnections] = useState([]);
+  const [loadingConnections, setLoadingConnections] = useState(false);
 
   const [params, setParams] = useState({
     "invalidate-cache": "",
     "test-connection-by-id": "",
+    "delete-connection-by-id": "",
     "get-cache-query": ""
   });
 
-  const [connectionTestJson, setConnectionTestJson] = useState(defaultConnectionJson);
-
   const isRunning = Boolean(runningKey);
+  const selectedEngineConfig = ENGINE_CONFIG[connectionForm.motor] || ENGINE_CONFIG.PostgreSQL;
 
   const panelTitle = useMemo(() => {
     if (isRunning) return "Ejecutando prueba...";
@@ -151,17 +158,29 @@ function DemoPanel({ open, onClose, onAfterRun }) {
 
     const handleEscape = (event) => {
       if (event.key === "Escape") {
-        if (isConnectionModalOpen) {
-          setIsConnectionModalOpen(false);
-        } else {
-          onClose();
+        if (showConnectionModal) {
+          setShowConnectionModal(false);
+          return;
         }
+        onClose();
       }
     };
 
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [open, onClose, isConnectionModalOpen]);
+  }, [open, onClose, showConnectionModal]);
+
+  useEffect(() => {
+    if (open) {
+      loadConnections();
+    }
+  }, [open]);
+
+  const refreshDashboard = () => {
+    if (typeof onAfterRun === "function") {
+      onAfterRun();
+    }
+  };
 
   const executeRequest = async ({ key, label, method, path, data }) => {
     const requestKey = key || `${method}-${path}`;
@@ -199,9 +218,8 @@ function DemoPanel({ open, onClose, onAfterRun }) {
         payload: response.data
       });
 
-      if (typeof onAfterRun === "function") {
-        onAfterRun();
-      }
+      refreshDashboard();
+      return response.data;
     } catch (error) {
       const duration = Math.round(performance.now() - startedAt);
       const status = error?.response?.status;
@@ -214,12 +232,34 @@ function DemoPanel({ open, onClose, onAfterRun }) {
         path,
         payload: getErrorPayload(error)
       });
+
+      return null;
     } finally {
       setRunningKey("");
     }
   };
 
-  const executeParameterized = (endpoint) => {
+  const loadConnections = async () => {
+    setLoadingConnections(true);
+
+    try {
+      const response = await api.get("/connections");
+      setSavedConnections(Array.isArray(response.data) ? response.data : []);
+    } catch (error) {
+      setConsoleState({
+        status: "error",
+        title: "No se pudieron cargar las conexiones",
+        detail: error?.response?.status ? `HTTP ${error.response.status}` : "Sin respuesta HTTP",
+        method: "GET",
+        path: "/connections",
+        payload: getErrorPayload(error)
+      });
+    } finally {
+      setLoadingConnections(false);
+    }
+  };
+
+  const executeParameterized = async (endpoint) => {
     const value = params[endpoint.key]?.trim();
 
     if (!value) {
@@ -236,71 +276,136 @@ function DemoPanel({ open, onClose, onAfterRun }) {
       return;
     }
 
-    executeRequest({
+    await executeRequest({
       key: endpoint.key,
       label: endpoint.label,
       method: endpoint.method,
       path: buildPath(endpoint.pathTemplate, endpoint.inputName, value)
     });
-  };
 
-  const executeConnectionTest = () => {
-    try {
-      const body = JSON.parse(connectionTestJson);
-
-      executeRequest({
-        key: "connection-test",
-        label: "Probar conexión",
-        method: "POST",
-        path: "/connections/test",
-        data: body
-      });
-    } catch {
-      setConsoleState({
-        status: "error",
-        title: "JSON inválido",
-        detail: "Revisa comillas, comas o llaves del body.",
-        method: "POST",
-        path: "/connections/test",
-        payload: {
-          error: "El body ingresado no tiene formato JSON válido."
-        }
-      });
+    if (endpoint.key === "delete-connection-by-id") {
+      loadConnections();
     }
   };
 
-  const updateConnectionField = (field, value) => {
+  const handleConnectionField = (field, value) => {
     setConnectionForm((current) => ({
       ...current,
       [field]: value
     }));
   };
 
-  const handleMotorChange = (motor) => {
-    setConnectionForm({
+  const handleEngineChange = (motor) => {
+    const engineConfig = ENGINE_CONFIG[motor];
+
+    setConnectionForm((current) => ({
+      ...current,
       motor,
-      ...engineDefaults[motor],
-      password: ""
+      nombre: current.nombre.includes(current.motor)
+        ? current.nombre.replace(current.motor, motor)
+        : `${motor} Real`,
+      port: engineConfig.port
+    }));
+  };
+
+  const buildConnectionPayload = () => ({
+    nombre: connectionForm.nombre.trim(),
+    motor: connectionForm.motor,
+    host: connectionForm.host.trim(),
+    port: Number(connectionForm.port),
+    database_name: connectionForm.database_name.trim(),
+    user_name: connectionForm.user_name.trim(),
+    password: connectionForm.password
+  });
+
+  const validateConnectionForm = () => {
+    const payload = buildConnectionPayload();
+
+    if (!payload.nombre || !payload.motor || !payload.host || !payload.database_name || !payload.user_name || !payload.password) {
+      setConsoleState({
+        status: "error",
+        title: "Formulario incompleto",
+        detail: "Completa todos los campos antes de ejecutar la prueba.",
+        method: "POST",
+        path: "/connections",
+        payload: {
+          required: ["nombre", "motor", "host", "port", "database_name", "user_name", "password"]
+        }
+      });
+      return null;
+    }
+
+    if (!Number.isInteger(payload.port) || payload.port <= 0) {
+      setConsoleState({
+        status: "error",
+        title: "Puerto inválido",
+        detail: "El puerto debe ser un número mayor que cero.",
+        method: "POST",
+        path: "/connections",
+        payload: {
+          port: payload.port
+        }
+      });
+      return null;
+    }
+
+    return payload;
+  };
+
+  const testConnectionForm = async () => {
+    const payload = validateConnectionForm();
+    if (!payload) return;
+
+    await executeRequest({
+      key: "connection-form-test",
+      label: "Probar conexión real",
+      method: "POST",
+      path: "/connections/test",
+      data: payload
     });
   };
 
-  const submitConnectionForm = (event) => {
-    event.preventDefault();
+  const registerConnectionForm = async () => {
+    const payload = validateConnectionForm();
+    if (!payload) return;
 
-    const body = {
-      ...connectionForm,
-      port: Number(connectionForm.port)
-    };
-
-    executeRequest({
-      key: "connection-register-modal",
-      label: "Registrar nueva conexión",
+    const result = await executeRequest({
+      key: "connection-form-register",
+      label: "Registrar nueva conexión real",
       method: "POST",
-      path: "/connections",
-      data: body
+      path: "/connections?validate_connection=true",
+      data: payload
     });
 
-    setIsConnectionModalOpen(false);
+    if (result) {
+      setShowConnectionModal(false);
+      await loadConnections();
+    }
+  };
+
+  const testSavedConnection = async (connectionId) => {
+    await executeRequest({
+      key: `test-saved-${connectionId}`,
+      label: `Probar conexión ${connectionId}`,
+      method: "POST",
+      path: `/connections/${connectionId}/test`
+    });
+
+    loadConnections();
+  };
+
+  const deleteSavedConnection = async (connectionId) => {
+    const accepted = window.confirm(`¿Seguro que quieres eliminar la conexión ID ${connectionId}?`);
+    if (!accepted) return;
+
+    await executeRequest({
+      key: `delete-saved-${connectionId}`,
+      label: `Eliminar conexión ${connectionId}`,
+      method: "DELETE",
+      path: `/connections/${connectionId}`
+    });
+
+    loadConnections();
   };
 
   if (!open) return null;
@@ -334,16 +439,70 @@ function DemoPanel({ open, onClose, onAfterRun }) {
 
         <div className="demo-panel-body">
           <section className="demo-panel-section">
-            <h3>Registro de conexiones</h3>
+            <h3>Conexiones reales</h3>
 
-            <button
-              className="demo-primary-action"
-              type="button"
-              disabled={isRunning}
-              onClick={() => setIsConnectionModalOpen(true)}
-            >
-              Registrar Nueva Conexión
-            </button>
+            <div className="connection-toolbar">
+              <button
+                className="connection-primary-button"
+                type="button"
+                disabled={isRunning}
+                onClick={() => setShowConnectionModal(true)}
+              >
+                Registrar Nueva Conexión
+              </button>
+
+              <button
+                className="connection-secondary-button"
+                type="button"
+                disabled={loadingConnections}
+                onClick={loadConnections}
+              >
+                Actualizar lista
+              </button>
+            </div>
+
+            <div className="connection-list">
+              {loadingConnections && <p className="connection-empty">Cargando conexiones...</p>}
+
+              {!loadingConnections && savedConnections.length === 0 && (
+                <p className="connection-empty">No hay conexiones registradas todavía.</p>
+              )}
+
+              {!loadingConnections && savedConnections.map((connection) => (
+                <article className="connection-card" key={connection.id}>
+                  <div>
+                    <strong>{connection.nombre}</strong>
+                    <span>
+                      ID {connection.id} · {connection.motor} · {connection.host}:{connection.port}/{connection.database_name}
+                    </span>
+                    <small>Usuario: {connection.user_name}</small>
+                  </div>
+
+                  <div className="connection-actions">
+                    <span className={`connection-status connection-status-${String(connection.status || "unknown").toLowerCase()}`}>
+                      {connection.status || "UNKNOWN"}
+                    </span>
+
+                    <button
+                      type="button"
+                      disabled={isRunning}
+                      onClick={() => testSavedConnection(connection.id)}
+                    >
+                      Probar
+                    </button>
+
+                    <button
+                      className="danger"
+                      type="button"
+                      disabled={isRunning}
+                      onClick={() => deleteSavedConnection(connection.id)}
+                    >
+                      Eliminar
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
           </section>
 
           <section className="demo-panel-section">
@@ -373,27 +532,6 @@ function DemoPanel({ open, onClose, onAfterRun }) {
             <h3>Endpoints parametrizados</h3>
 
             <div className="demo-param-list">
-              <div className="demo-param-row">
-                <div>
-                  <strong>Probar conexión con JSON</strong>
-                  <span>POST /connections/test</span>
-                </div>
-
-                <input
-                  value={connectionTestJson}
-                  placeholder='{"nombre":"PostgreSQL","motor":"PostgreSQL"...}'
-                  onChange={(event) => setConnectionTestJson(event.target.value)}
-                />
-
-                <button
-                  type="button"
-                  disabled={isRunning}
-                  onClick={executeConnectionTest}
-                >
-                  Ejecutar
-                </button>
-              </div>
-
               {parameterizedEndpoints.map((endpoint) => (
                 <div className="demo-param-row" key={endpoint.key}>
                   <div>
@@ -445,45 +583,51 @@ function DemoPanel({ open, onClose, onAfterRun }) {
         </footer>
       </aside>
 
-      {isConnectionModalOpen && (
-        <div className="connection-modal-layer" role="dialog" aria-modal="true">
+      {showConnectionModal && (
+        <div className="connection-modal-layer" role="presentation">
           <button
             className="connection-modal-backdrop"
             type="button"
-            aria-label="Cerrar modal de conexión"
-            onClick={() => setIsConnectionModalOpen(false)}
+            aria-label="Cerrar formulario de conexión"
+            onClick={() => setShowConnectionModal(false)}
           />
 
-          <form className="connection-modal" onSubmit={submitConnectionForm}>
-            <div className="connection-modal-header">
+          <section className="connection-modal" aria-label="Formulario para registrar nueva conexión">
+            <header className="connection-modal-header">
               <div>
-                <span className="demo-panel-eyebrow">Módulo 1</span>
+                <span>Registro real de motor</span>
                 <h3>Registrar Nueva Conexión</h3>
-                <p>El backend probará la conexión real antes de guardar las credenciales cifradas.</p>
+                <p>Primero se prueba la conexión real. Solo se guarda si responde correctamente.</p>
               </div>
-              <button type="button" onClick={() => setIsConnectionModalOpen(false)}>×</button>
-            </div>
 
-            <label>
-              Tipo de Motor
-              <select
-                value={connectionForm.motor}
-                onChange={(event) => handleMotorChange(event.target.value)}
+              <button
+                type="button"
+                onClick={() => setShowConnectionModal(false)}
+                aria-label="Cerrar modal"
               >
-                <option value="PostgreSQL">PostgreSQL</option>
-                <option value="SQL Server">SQL Server</option>
-                <option value="Oracle">Oracle</option>
-              </select>
-            </label>
+                ×
+              </button>
+            </header>
 
             <div className="connection-form-grid">
+              <label>
+                Tipo de Motor
+                <select
+                  value={connectionForm.motor}
+                  onChange={(event) => handleEngineChange(event.target.value)}
+                >
+                  {Object.keys(ENGINE_CONFIG).map((motor) => (
+                    <option value={motor} key={motor}>{motor}</option>
+                  ))}
+                </select>
+              </label>
+
               <label>
                 Nombre visible
                 <input
                   value={connectionForm.nombre}
-                  onChange={(event) => updateConnectionField("nombre", event.target.value)}
-                  required
-                  minLength={3}
+                  onChange={(event) => handleConnectionField("nombre", event.target.value)}
+                  placeholder={`${connectionForm.motor} Producción`}
                 />
               </label>
 
@@ -491,8 +635,8 @@ function DemoPanel({ open, onClose, onAfterRun }) {
                 Host
                 <input
                   value={connectionForm.host}
-                  onChange={(event) => updateConnectionField("host", event.target.value)}
-                  required
+                  onChange={(event) => handleConnectionField("host", event.target.value)}
+                  placeholder={selectedEngineConfig.hostPlaceholder}
                 />
               </label>
 
@@ -501,9 +645,8 @@ function DemoPanel({ open, onClose, onAfterRun }) {
                 <input
                   type="number"
                   value={connectionForm.port}
-                  onChange={(event) => updateConnectionField("port", event.target.value)}
-                  required
-                  min="1"
+                  onChange={(event) => handleConnectionField("port", event.target.value)}
+                  placeholder={String(selectedEngineConfig.port)}
                 />
               </label>
 
@@ -511,8 +654,8 @@ function DemoPanel({ open, onClose, onAfterRun }) {
                 Nombre de BD / Service Name
                 <input
                   value={connectionForm.database_name}
-                  onChange={(event) => updateConnectionField("database_name", event.target.value)}
-                  required
+                  onChange={(event) => handleConnectionField("database_name", event.target.value)}
+                  placeholder={selectedEngineConfig.dbPlaceholder}
                 />
               </label>
 
@@ -520,32 +663,46 @@ function DemoPanel({ open, onClose, onAfterRun }) {
                 Usuario
                 <input
                   value={connectionForm.user_name}
-                  onChange={(event) => updateConnectionField("user_name", event.target.value)}
-                  required
+                  onChange={(event) => handleConnectionField("user_name", event.target.value)}
+                  placeholder={selectedEngineConfig.userPlaceholder}
                 />
               </label>
 
-              <label>
+              <label className="connection-form-full">
                 Contraseña
                 <input
                   type="password"
                   value={connectionForm.password}
-                  onChange={(event) => updateConnectionField("password", event.target.value)}
-                  required
-                  minLength={4}
+                  onChange={(event) => handleConnectionField("password", event.target.value)}
+                  placeholder="Contraseña real del motor"
                 />
               </label>
             </div>
 
-            <div className="connection-modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => setIsConnectionModalOpen(false)}>
-                Cancelar
+            <div className="connection-modal-note">
+              <strong>Tip Docker:</strong> si la BD está instalada en tu Windows y el backend corre en contenedor, usa <code>host.docker.internal</code> como host.
+            </div>
+
+            <footer className="connection-modal-actions">
+              <button
+                type="button"
+                className="connection-secondary-button"
+                disabled={isRunning}
+                onClick={testConnectionForm}
+              >
+                Probar conexión
               </button>
-              <button type="submit" className="btn btn-primary" disabled={isRunning}>
+
+              <button
+                type="button"
+                className="connection-primary-button"
+                disabled={isRunning}
+                onClick={registerConnectionForm}
+              >
                 Probar y guardar
               </button>
-            </div>
-          </form>
+            </footer>
+          </section>
         </div>
       )}
     </div>
