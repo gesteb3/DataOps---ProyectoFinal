@@ -23,7 +23,6 @@ import DemoPanel from "../components/DemoPanel";
 
 const initialData = {
   health: null,
-  connections: [],
   performance: [],
   slowQueries: [],
   backupSla: null,
@@ -34,13 +33,13 @@ const initialData = {
   backupSnapshots: [],
   cacheSummary: null,
   alertLogs: [],
-  jobAudit: []
+  jobAudit: [],
+  connections: []
 };
 
 const AUTO_REFRESH_MS = 10000;
 const endpointConfig = [
   ["health", dashboardApi.healthSummary],
-  ["connections", dashboardApi.connections],
   ["performance", dashboardApi.performance],
   ["slowQueries", dashboardApi.slowQueries],
   ["backupSla", dashboardApi.backupSla],
@@ -51,8 +50,11 @@ const endpointConfig = [
   ["backupSnapshots", dashboardApi.backupSnapshots],
   ["cacheSummary", dashboardApi.cacheSummary],
   ["alertLogs", dashboardApi.alertLogs],
-  ["jobAudit", dashboardApi.jobAudit]
+  ["jobAudit", dashboardApi.jobAudit],
+  ["connections", dashboardApi.connectionDatabases]
 ];
+
+const officialEngines = ["PostgreSQL", "SQL Server", "Oracle"];
 
 function formatDate(value) {
   if (!value) return "—";
@@ -79,19 +81,17 @@ function getErrorMessage(error) {
 
 function statusBadge(status) {
   const normalized = String(status || "SIN ESTADO").toUpperCase();
-  const isOk = ["OK", "ONLINE", "SUCCESS", "EXITOSO", "RESOLVED"].some((word) => normalized.includes(word));
-  const isBad = ["CRITICAL", "FAILED", "ERROR", "PENDING", "CRÍTICO"].some((word) => normalized.includes(word));
+  const isOk = ["OK", "ONLINE", "SUCCESS", "EXITOSO", "RESOLVED", "SÍ", "SLA OK"].some((word) => normalized.includes(word));
+  const isBad = ["CRITICAL", "FAILED", "ERROR", "PENDING", "CRÍTICO", "NO"].some((word) => normalized.includes(word));
 
   return <span className={`badge ${isBad ? "danger" : isOk ? "success" : "warning"}`}>{status || "—"}</span>;
 }
-
-const officialEngines = ["PostgreSQL", "SQL Server", "Oracle"];
 
 function normalizeEngineName(value = "") {
   const text = String(value).toLowerCase();
 
   if (text.includes("postgres")) return "PostgreSQL";
-  if (text.includes("sql server") || text.includes("sqlserver") || text.includes("mssql")) return "SQL Server";
+  if (text.includes("sql server") || text.includes("sql_server") || text.includes("sqlserver") || text.includes("mssql")) return "SQL Server";
   if (text.includes("oracle")) return "Oracle";
 
   return null;
@@ -144,53 +144,55 @@ function getAverageAvailabilityByEngine(items = []) {
     .filter(Boolean);
 }
 
-function matchesGlobalFilter(item, globalFilter) {
-  const selectedMotor = globalFilter?.motor || "Todos";
-  const selectedDatabase = globalFilter?.databaseName || "Todas";
-
-  const itemMotor = normalizeEngineName(
+function getItemEngine(item = {}) {
+  return normalizeEngineName(
     item.motor ||
+    item.engine ||
     item.engine_type ||
     item.database_type ||
-    item.engine ||
+    item.affected_engine ||
     item.nombre ||
+    item.file_name ||
+    item.name ||
     ""
   );
-
-  const itemDatabase = item.database_name || item.databaseName || item.db_name || "";
-
-  const motorMatches = selectedMotor === "Todos" || itemMotor === selectedMotor;
-  const databaseMatches = selectedDatabase === "Todas" || itemDatabase === selectedDatabase;
-
-  return motorMatches && databaseMatches;
 }
 
-function getDatabaseOptions(connections = [], selectedMotor = "Todos") {
-  const options = new Set();
+function getItemConnectionId(item = {}) {
+  return Number(item.connection_id || item.connectionId || item.connection || 0);
+}
 
-  connections.forEach((connection) => {
-    const connectionMotor = normalizeEngineName(connection.motor || "");
+function getItemDatabaseName(item = {}) {
+  return String(
+    item.database_name ||
+    item.database ||
+    item.db_name ||
+    item.file_name ||
+    ""
+  ).toLowerCase();
+}
 
-    if (selectedMotor !== "Todos" && connectionMotor !== selectedMotor) {
-      return;
-    }
+function sortByNewest(items = []) {
+  return [...items].sort((a, b) => {
+    const dateA = new Date(a.created_at || a.capture_time || a.restore_point || 0).getTime();
+    const dateB = new Date(b.created_at || b.capture_time || b.restore_point || 0).getTime();
 
-    if (connection.database_name) {
-      options.add(connection.database_name);
-    }
+    if (dateB !== dateA) return dateB - dateA;
+
+    return Number(b.id || 0) - Number(a.id || 0);
   });
-
-  return [...options].sort((a, b) => a.localeCompare(b));
 }
+
 function Dashboard({ onLogout }) {
   const [data, setData] = useState(initialData);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(true);
+  const [backupRunning, setBackupRunning] = useState(false);
   const [actionMessage, setActionMessage] = useState("");
   const [isDemoPanelOpen, setIsDemoPanelOpen] = useState(false);
-  const [globalFilter, setGlobalFilter] = useState({
-    motor: "Todos",
-    databaseName: "Todas"
+  const [filters, setFilters] = useState({
+    engines: [],
+    connectionIds: []
   });
 
   const loadDashboard = async ({ silent = false } = {}) => {
@@ -222,6 +224,77 @@ function Dashboard({ onLogout }) {
     setLoading(false);
   };
 
+  const selectedConnectionIds = useMemo(
+    () => new Set((filters.connectionIds || []).map(Number)),
+    [filters.connectionIds]
+  );
+
+  const selectedDatabases = useMemo(() => {
+    return (data.connections || [])
+      .filter((connection) => selectedConnectionIds.has(Number(connection.connection_id || connection.id)))
+      .map((connection) => String(connection.database_name || "").toLowerCase())
+      .filter(Boolean);
+  }, [data.connections, selectedConnectionIds]);
+
+  const selectedDatabaseSet = useMemo(
+    () => new Set(selectedDatabases),
+    [selectedDatabases]
+  );
+
+  const selectedEngineSet = useMemo(
+    () => new Set(filters.engines || []),
+    [filters.engines]
+  );
+
+  const matchesGlobalFilter = (item = {}) => {
+    const itemConnectionId = getItemConnectionId(item);
+    const itemEngine = getItemEngine(item);
+    const itemDatabase = getItemDatabaseName(item);
+
+    if (selectedConnectionIds.size > 0) {
+      if (itemConnectionId && selectedConnectionIds.has(itemConnectionId)) return true;
+      if (itemDatabase && selectedDatabases.some((db) => itemDatabase.includes(db))) return true;
+      return false;
+    }
+
+    if (selectedEngineSet.size > 0) {
+      if (!itemEngine) return true;
+      return selectedEngineSet.has(itemEngine);
+    }
+
+    return true;
+  };
+
+  const filteredPerformance = useMemo(
+    () => (data.performance || []).filter(matchesGlobalFilter),
+    [data.performance, selectedConnectionIds, selectedDatabases, selectedEngineSet]
+  );
+
+  const filteredSlowQueries = useMemo(
+    () => (data.slowQueries || []).filter(matchesGlobalFilter),
+    [data.slowQueries, selectedConnectionIds, selectedDatabases, selectedEngineSet]
+  );
+
+  const filteredAvailabilityRaw = useMemo(
+    () => (data.availability || []).filter(matchesGlobalFilter),
+    [data.availability, selectedConnectionIds, selectedDatabases, selectedEngineSet]
+  );
+
+  const filteredAlertLogs = useMemo(
+    () => (data.alertLogs || []).filter(matchesGlobalFilter),
+    [data.alertLogs, selectedConnectionIds, selectedDatabases, selectedEngineSet]
+  );
+
+  const filteredBackupHistory = useMemo(
+    () => sortByNewest((data.backupHistory || []).filter(matchesGlobalFilter)),
+    [data.backupHistory, selectedConnectionIds, selectedDatabases, selectedEngineSet]
+  );
+
+  const filteredBackupSnapshots = useMemo(
+    () => sortByNewest((data.backupSnapshots || []).filter(matchesGlobalFilter)),
+    [data.backupSnapshots, selectedConnectionIds, selectedDatabases, selectedEngineSet]
+  );
+
   const handleResolveAllAlerts = async () => {
     setActionMessage("");
 
@@ -231,6 +304,40 @@ function Dashboard({ onLogout }) {
       await loadDashboard();
     } catch {
       setActionMessage("No se pudieron resolver las alertas pendientes.");
+    }
+  };
+
+  const handleRunBackup = async (backupType) => {
+    setActionMessage("");
+    setBackupRunning(true);
+
+    const payload = {
+      backup_type: backupType,
+      target: "ALL",
+      connection_ids: filters.connectionIds,
+      engines: filters.connectionIds.length ? [] : filters.engines,
+      database_names: []
+    };
+
+    if (filters.connectionIds.length > 0) {
+      payload.target = "SELECTED";
+    } else if (filters.engines.length > 0) {
+      payload.target = "ENGINE_SELECTION";
+    }
+
+    try {
+      const response = await dashboardApi.runBackup(payload);
+      const successful = response.data?.successful ?? 0;
+      const failed = response.data?.failed ?? 0;
+
+      setActionMessage(`Backup ${backupType} finalizado: ${successful} exitoso(s), ${failed} fallido(s).`);
+      await loadDashboard({ silent: true });
+    } catch (error) {
+      const detail = error?.response?.data?.detail;
+      const message = typeof detail === "string" ? detail : "No se pudo ejecutar el backup para la selección actual.";
+      setActionMessage(message);
+    } finally {
+      setBackupRunning(false);
     }
   };
 
@@ -244,39 +351,14 @@ function Dashboard({ onLogout }) {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  const filteredConnections = useMemo(
-    () => (data.connections || []).filter((item) => matchesGlobalFilter(item, globalFilter)),
-    [data.connections, globalFilter]
-  );
-
-  const databaseOptions = useMemo(
-    () => getDatabaseOptions(data.connections || [], globalFilter.motor),
-    [data.connections, globalFilter.motor]
-  );
-
-  const filteredPerformanceRows = useMemo(
-    () => (data.performance || []).filter((item) => matchesGlobalFilter(item, globalFilter)),
-    [data.performance, globalFilter]
-  );
-
   const performance = useMemo(
-    () => [...filteredPerformanceRows].reverse().slice(-25),
-    [filteredPerformanceRows]
-  );
-
-  const filteredAvailabilityRows = useMemo(
-    () => (data.availability || []).filter((item) => matchesGlobalFilter(item, globalFilter)),
-    [data.availability, globalFilter]
+    () => [...filteredPerformance].reverse().slice(-25),
+    [filteredPerformance]
   );
 
   const availability = useMemo(
-    () => getAverageAvailabilityByEngine(filteredAvailabilityRows),
-    [filteredAvailabilityRows]
-  );
-
-  const filteredSlowQueries = useMemo(
-    () => (data.slowQueries || []).filter((item) => matchesGlobalFilter(item, globalFilter)),
-    [data.slowQueries, globalFilter]
+    () => getAverageAvailabilityByEngine(filteredAvailabilityRaw),
+    [filteredAvailabilityRaw]
   );
 
   const replicationLag = useMemo(
@@ -285,8 +367,8 @@ function Dashboard({ onLogout }) {
   );
 
   const pendingAlerts = useMemo(
-    () => (data.alertLogs || []).filter((alert) => alert.resolution_status === "PENDING"),
-    [data.alertLogs]
+    () => filteredAlertLogs.filter((alert) => alert.resolution_status === "PENDING"),
+    [filteredAlertLogs]
   );
 
   const criticalAlerts = pendingAlerts.filter((alert) => String(alert.severity).toLowerCase().includes("critical"));
@@ -314,9 +396,11 @@ function Dashboard({ onLogout }) {
           onLogout={onLogout}
           onResolveAll={handleResolveAllAlerts}
           pendingAlerts={pendingAlerts.length}
-          globalFilter={globalFilter}
-          databaseOptions={databaseOptions}
-          onFilterChange={setGlobalFilter}
+          connections={data.connections || []}
+          filters={filters}
+          onFilterChange={setFilters}
+          onRunBackup={handleRunBackup}
+          backupRunning={backupRunning}
         />
 
         {actionMessage && <div className="action-message">{actionMessage}</div>}
@@ -333,10 +417,10 @@ function Dashboard({ onLogout }) {
         )}
 
         <section className="stats-grid" id="overview">
-          <StatCard title="Motores registrados" value={globalFilter.motor === "Todos" && globalFilter.databaseName === "Todas" ? data.health?.registered_engines ?? 0 : filteredConnections.length} subtitle="Conexiones configuradas" icon="DB" />
+          <StatCard title="Motores registrados" value={data.health?.registered_engines ?? 0} subtitle="Conexiones configuradas" icon="DB" />
           <StatCard title="Métricas capturadas" value={data.health?.captured_metrics ?? 0} subtitle={data.health?.status ?? "Sin estado"} tone="purple" icon="M" />
-          <StatCard title="CPU actual" value={`${latestMetric.cpu ?? data.health?.latest_cpu ?? 0}%`} subtitle="Última métrica según filtro" tone="orange" icon="CPU" />
-          <StatCard title="Disco actual" value={`${latestMetric.disk_usage ?? data.health?.latest_disk_usage ?? 0}%`} subtitle="Uso según filtro" tone="green" icon="HD" />
+          <StatCard title="CPU actual" value={`${data.health?.latest_cpu ?? latestMetric.cpu ?? 0}%`} subtitle="Última métrica registrada" tone="orange" icon="CPU" />
+          <StatCard title="Disco actual" value={`${data.health?.latest_disk_usage ?? latestMetric.disk_usage ?? 0}%`} subtitle="Uso de almacenamiento" tone="green" icon="HD" />
           <StatCard title="SLA Backups" value={data.backupSla?.sla_compliance ?? "No"} subtitle={`RPO ${data.backupSla?.rpo_target_minutes ?? 15} min / RTO ${data.backupSla?.rto_target_minutes ?? 45} min`} tone="blue" icon="SLA" />
           <StatCard title="Cache Hit Rate" value={`${cacheHitRate}%`} subtitle={`${cacheHits} hits / ${cacheMisses} misses`} tone="green" icon="R" />
           <StatCard title="Alertas pendientes" value={pendingAlerts.length} subtitle={`${criticalAlerts.length} críticas`} tone={pendingAlerts.length ? "red" : "green"} icon="!" />
@@ -344,7 +428,7 @@ function Dashboard({ onLogout }) {
         </section>
 
         <section className="dashboard-grid two" id="performance">
-          <ChartCard title="Rendimiento temporal" subtitle="" error={errors.performance} loading={loading}>
+          <ChartCard title="Rendimiento temporal" subtitle="Filtrado por selección global" error={errors.performance} loading={loading}>
             <ResponsiveContainer width="100%" height={320}>
               <LineChart data={performance} margin={{ top: 10, right: 18, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -388,7 +472,7 @@ function Dashboard({ onLogout }) {
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Top queries lentas" subtitle="+" error={errors.slowQueries} loading={loading}>
+          <ChartCard title="Top queries lentas" subtitle="Filtrado por selección global" error={errors.slowQueries} loading={loading}>
             <DataTable
               compact
               rows={filteredSlowQueries.slice(0, 10)}
@@ -403,9 +487,9 @@ function Dashboard({ onLogout }) {
         </section>
 
         <section className="dashboard-grid two" id="alerts">
-          <ChartCard title="Alertas registradas" subtitle="" error={errors.alertLogs} loading={loading}>
+          <ChartCard title="Alertas registradas" subtitle="Filtradas por selección global" error={errors.alertLogs} loading={loading}>
             <DataTable
-              rows={(data.alertLogs || []).slice(0, 10)}
+              rows={filteredAlertLogs.slice(0, 10)}
               columns={[
                 { key: "condition_triggered", label: "Condición" },
                 { key: "affected_engine", label: "Motor" },
@@ -433,7 +517,7 @@ function Dashboard({ onLogout }) {
           <div className="section-heading">
             <div>
               <h2>Backups y cumplimiento SLA</h2>
-              <p>Historial de backups, snapshots y objetivos RPO/RTO.</p>
+              <p>Historial ordenado del más reciente al más antiguo. Usa el filtro global para elegir motores y bases.</p>
             </div>
             {statusBadge(data.backupSla?.sla_compliance === "Sí" ? "SLA OK" : "SLA NO")}
           </div>
@@ -448,7 +532,7 @@ function Dashboard({ onLogout }) {
 
           <div className="dashboard-grid two inner-grid">
             <DataTable
-              rows={(data.backupHistory || []).slice(0, 8)}
+              rows={filteredBackupHistory.slice(0, 8)}
               emptyMessage={errors.backupHistory || "Sin backups registrados"}
               columns={[
                 { key: "backup_type", label: "Tipo" },
@@ -460,7 +544,7 @@ function Dashboard({ onLogout }) {
             />
 
             <DataTable
-              rows={(data.backupSnapshots || []).slice(0, 8)}
+              rows={filteredBackupSnapshots.slice(0, 8)}
               emptyMessage={errors.backupSnapshots || "Sin snapshots registrados"}
               columns={[
                 { key: "snapshot_name", label: "Snapshot" },
@@ -476,7 +560,7 @@ function Dashboard({ onLogout }) {
           <div className="section-heading">
             <div>
               <h2>Auditoría de jobs automáticos</h2>
-              <p>Procesos registrados </p>
+              <p>Procesos registrados</p>
             </div>
             <span className="pill">{(data.jobAudit || []).length} registros</span>
           </div>

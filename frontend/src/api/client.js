@@ -4,7 +4,7 @@ export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export const api = axios.create({
   baseURL: API_URL,
-  timeout: 12000
+  timeout: 120000
 });
 
 api.interceptors.request.use((config) => {
@@ -33,7 +33,6 @@ export async function loginRequest(username, password) {
 
 export const dashboardApi = {
   healthSummary: () => api.get("/health-summary"),
-  connections: () => api.get("/connections/databases"),
   performance: () => api.get("/bi/performance"),
   slowQueries: () => api.get("/bi/top-slow-queries"),
   backupSla: () => api.get("/bi/backup-sla"),
@@ -45,5 +44,7 @@ export const dashboardApi = {
   cacheSummary: () => api.get("/cache/summary"),
   alertLogs: () => api.get("/alerts/logs"),
   resolveAllAlerts: () => api.put("/alerts/resolve-all"),
-  jobAudit: () => api.get("/jobs/audit")
+  jobAudit: () => api.get("/jobs/audit"),
+  connectionDatabases: () => api.get("/connections/databases"),
+  runBackup: (payload) => api.post("/backup/run", payload)
 };

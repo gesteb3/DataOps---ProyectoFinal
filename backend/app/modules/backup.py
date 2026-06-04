@@ -1,15 +1,18 @@
+import hashlib
 import os
 import random
-import hashlib
 import time
-import boto3
-
 from datetime import datetime
+from typing import Optional
+
+import boto3
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import BackupHistory
+from app.models import BackupHistory, Connection
+from app.services.multi_engine_backup_service import create_real_backup_for_connection
 from app.services.s3_backup_service import upload_backup_to_s3, find_latest_backup_in_s3
 
 
@@ -17,6 +20,35 @@ router = APIRouter(
     prefix="/backup",
     tags=["Backup"]
 )
+
+
+ALLOWED_BACKUP_TYPES = [
+    "FULL",
+    "DIFF",
+    "INC",
+    "PRE_DEPLOY",
+    "PRE_TEST",
+    "PRE_IMPORT"
+]
+
+
+class BackupRunRequest(BaseModel):
+    backup_type: str = Field("FULL", description="FULL, DIFF, INC, PRE_DEPLOY, PRE_TEST o PRE_IMPORT")
+    target: str = Field("ALL", description="ALL, SELECTED, ENGINE_SELECTION o nombre de motor")
+    connection_id: Optional[int] = None
+    connection_ids: list[int] = Field(default_factory=list)
+    engines: list[str] = Field(default_factory=list)
+    database_names: list[str] = Field(default_factory=list)
+
+
+class BackupRunResponse(BaseModel):
+    message: str
+    backup_type: str
+    target: str
+    total: int
+    successful: int
+    failed: int
+    results: list[dict]
 
 
 def calculate_file_checksum(file_path: str):
@@ -27,12 +59,6 @@ def calculate_file_checksum(file_path: str):
             sha256.update(block)
 
     return sha256.hexdigest()
-
-
-def create_hash(data):
-    return hashlib.sha256(
-        data.encode()
-    ).hexdigest()
 
 
 def normalize_s3_prefix(prefix: str):
@@ -47,14 +73,6 @@ def normalize_s3_prefix(prefix: str):
     return prefix.strip("/") + "/"
 
 
-def build_s3_key(file_name: str):
-    prefix = normalize_s3_prefix(
-        os.getenv("AWS_BACKUP_PREFIX", "")
-    )
-
-    return f"{prefix}{file_name}"
-
-
 def get_s3_client():
     region = os.getenv(
         "AWS_REGION",
@@ -67,36 +85,6 @@ def get_s3_client():
         aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
         region_name=region
     )
-
-
-def get_latest_s3_backup(s3, bucket: str, prefix: str = ""):
-    paginator = s3.get_paginator("list_objects_v2")
-
-    latest_object = None
-
-    for page in paginator.paginate(
-        Bucket=bucket,
-        Prefix=prefix
-    ):
-        for obj in page.get("Contents", []):
-            key = obj.get("Key", "")
-
-            if not key:
-                continue
-
-            if key.endswith("/"):
-                continue
-
-            if not key.endswith(".bak"):
-                continue
-
-            if obj.get("Size", 0) <= 0:
-                continue
-
-            if latest_object is None or obj["LastModified"] > latest_object["LastModified"]:
-                latest_object = obj
-
-    return latest_object
 
 
 def replicate_to_cloud(local_file_path, file_name, backup_type):
@@ -136,85 +124,198 @@ def replicate_to_cloud(local_file_path, file_name, backup_type):
     }
 
 
-def simulate_backup(backup_type):
-    db: Session = SessionLocal()
+def normalize_backup_type(backup_type: str) -> str:
+    normalized = str(backup_type or "FULL").strip().upper()
 
-    start = time.time()
-
-    file_name = f"{backup_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
-
-    size = round(
-        random.uniform(50, 300),
-        2
-    )
-
-    time.sleep(2)
-
-    duration = round(
-        time.time() - start,
-        2
-    )
-
-    restore = f"RP-{datetime.now()}"
-
-    backup_folder = "backups"
-
-    os.makedirs(
-        backup_folder,
-        exist_ok=True
-    )
-
-    local_file_path = os.path.join(
-        backup_folder,
-        file_name
-    )
-
-    with open(local_file_path, "w") as backup_file:
-        backup_file.write(
-            f"Backup type: {backup_type}\n"
-            f"Generated at: {datetime.now()}\n"
-            f"Restore point: {restore}\n"
+    if normalized not in ALLOWED_BACKUP_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="backup_type debe ser FULL, DIFF, INC, PRE_DEPLOY, PRE_TEST o PRE_IMPORT"
         )
 
-    hash_value = calculate_file_checksum(local_file_path)
+    return normalized
 
-    cloud_result = replicate_to_cloud(
-        local_file_path,
-        file_name,
-        backup_type
+
+def normalize_engine(value: str) -> str:
+    text = str(value or "").strip().lower()
+
+    if text in ["postgres", "postgresql"]:
+        return "PostgreSQL"
+
+    if text in ["sql server", "sqlserver", "mssql"]:
+        return "SQL Server"
+
+    if text == "oracle":
+        return "Oracle"
+
+    return str(value or "").strip()
+
+
+def get_backup_connections(db: Session, request: BackupRunRequest):
+    query = db.query(Connection)
+
+    selected_ids = list(dict.fromkeys(request.connection_ids or []))
+
+    if request.connection_id and request.connection_id not in selected_ids:
+        selected_ids.append(request.connection_id)
+
+    if selected_ids:
+        return query.filter(Connection.id.in_(selected_ids)).order_by(
+            Connection.motor.asc(),
+            Connection.database_name.asc(),
+            Connection.nombre.asc()
+        ).all()
+
+    selected_engines = [normalize_engine(engine) for engine in request.engines if str(engine).strip()]
+    selected_databases = [database.strip() for database in request.database_names if str(database).strip()]
+    target = str(request.target or "ALL").strip()
+
+    if selected_engines:
+        query = query.filter(Connection.motor.in_(selected_engines))
+
+    elif target.upper() not in ["ALL", "SELECTED", "ENGINE_SELECTION"]:
+        query = query.filter(Connection.motor == normalize_engine(target))
+
+    if selected_databases:
+        query = query.filter(Connection.database_name.in_(selected_databases))
+
+    return query.order_by(
+        Connection.motor.asc(),
+        Connection.database_name.asc(),
+        Connection.nombre.asc()
+    ).all()
+
+
+def save_backup_record(
+    db: Session,
+    backup_type: str,
+    backup_result: dict,
+    cloud_result: dict
+):
+    cloud_url = (
+        f"CLOUD_REPLICATION_FAILED: {cloud_result['error']}"
+        if cloud_result["status"] == "FAILED"
+        else cloud_result["url"]
     )
 
-    if cloud_result["status"] == "FAILED":
-        fake_cloud = f"CLOUD_REPLICATION_FAILED: {cloud_result['error']}"
-    else:
-        fake_cloud = cloud_result["url"]
+    hash_value = calculate_file_checksum(
+        backup_result["local_file_path"]
+    )
 
     backup = BackupHistory(
         backup_type=backup_type,
-        file_name=file_name,
-        size_mb=size,
-        duration_seconds=duration,
-        restore_point=restore,
+        file_name=backup_result["file_name"],
+        size_mb=backup_result["size_mb"],
+        duration_seconds=backup_result["duration_seconds"],
+        restore_point=f"RP-{datetime.now()}",
         snapshot_name=backup_type if backup_type in ["PRE_DEPLOY", "PRE_TEST", "PRE_IMPORT"] else None,
-        cloud_url=fake_cloud,
+        cloud_url=cloud_url,
         hash_value=hash_value
     )
 
     db.add(backup)
     db.commit()
-    db.close()
+    db.refresh(backup)
 
     return {
-        "type": backup_type,
-        "file": file_name,
-        "size_mb": size,
-        "duration_seconds": duration,
+        "backup_id": backup.id,
+        "backup_type": backup_type,
+        "engine": backup_result["engine"],
+        "source": backup_result["source"],
+        "file": backup_result["file_name"],
+        "file_name": backup_result["file_name"],
+        "local_file_path": backup_result["local_file_path"],
+        "size_mb": backup_result["size_mb"],
+        "duration_seconds": backup_result["duration_seconds"],
         "cloud_status": cloud_result["status"],
-        "cloud": fake_cloud,
+        "cloud": cloud_url,
+        "cloud_url": cloud_url,
         "s3_key": cloud_result.get("s3_key"),
         "s3_folder": cloud_result.get("folder"),
-        "checksum": hash_value
+        "checksum": hash_value,
+        "created_at": backup.created_at
     }
+
+
+def run_real_backup_process(request: BackupRunRequest):
+    backup_type = normalize_backup_type(request.backup_type)
+    db: Session = SessionLocal()
+
+    try:
+        connections = get_backup_connections(db, request)
+
+        if not connections:
+            raise HTTPException(
+                status_code=404,
+                detail="No se encontraron conexiones para generar backup. Registra motores reales primero."
+            )
+
+        results = []
+
+        for connection in connections:
+            connection_payload = {
+                "id": connection.id,
+                "nombre": connection.nombre,
+                "motor": connection.motor,
+                "database_name": connection.database_name,
+                "host": connection.host,
+                "port": connection.port
+            }
+
+            try:
+                backup_result = create_real_backup_for_connection(
+                    connection,
+                    backup_type
+                )
+
+                cloud_result = replicate_to_cloud(
+                    backup_result["local_file_path"],
+                    backup_result["file_name"],
+                    backup_type
+                )
+
+                saved = save_backup_record(
+                    db,
+                    backup_type,
+                    backup_result,
+                    cloud_result
+                )
+
+                results.append({
+                    "status": "SUCCESS",
+                    "connection": connection_payload,
+                    **saved
+                })
+
+            except HTTPException as exc:
+                results.append({
+                    "status": "FAILED",
+                    "connection": connection_payload,
+                    "error": exc.detail
+                })
+
+            except Exception as exc:
+                results.append({
+                    "status": "FAILED",
+                    "connection": connection_payload,
+                    "error": str(exc)
+                })
+
+        successful = len([item for item in results if item["status"] == "SUCCESS"])
+        failed = len(results) - successful
+
+        return {
+            "message": "Proceso de backup finalizado.",
+            "backup_type": backup_type,
+            "target": request.target,
+            "total": len(results),
+            "successful": successful,
+            "failed": failed,
+            "results": results
+        }
+
+    finally:
+        db.close()
 
 
 def simulate_restore_response():
@@ -237,19 +338,39 @@ def simulate_restore_response():
     }
 
 
+@router.post("/run")
+def run_backup(request: BackupRunRequest):
+    return run_real_backup_process(request)
+
+
 @router.post("/full")
 def full_backup():
-    return simulate_backup("FULL")
+    return run_real_backup_process(
+        BackupRunRequest(
+            backup_type="FULL",
+            target="ALL"
+        )
+    )
 
 
 @router.post("/diff")
 def diff_backup():
-    return simulate_backup("DIFF")
+    return run_real_backup_process(
+        BackupRunRequest(
+            backup_type="DIFF",
+            target="ALL"
+        )
+    )
 
 
 @router.post("/inc")
 def inc_backup():
-    return simulate_backup("INC")
+    return run_real_backup_process(
+        BackupRunRequest(
+            backup_type="INC",
+            target="ALL"
+        )
+    )
 
 
 @router.get("/history")
@@ -260,6 +381,9 @@ def history():
         BackupHistory
     ).filter(
         BackupHistory.snapshot_name == None
+    ).order_by(
+        BackupHistory.created_at.desc(),
+        BackupHistory.id.desc()
     ).all()
 
     db.close()
@@ -275,6 +399,9 @@ def snapshots_history():
         BackupHistory
     ).filter(
         BackupHistory.snapshot_name != None
+    ).order_by(
+        BackupHistory.created_at.desc(),
+        BackupHistory.id.desc()
     ).all()
 
     db.close()
@@ -284,14 +411,20 @@ def snapshots_history():
 
 @router.post("/snapshot/{snapshot_name}")
 def create_snapshot(snapshot_name: str):
+    normalized_snapshot = normalize_backup_type(snapshot_name)
     allowed = ["PRE_DEPLOY", "PRE_TEST", "PRE_IMPORT"]
 
-    if snapshot_name not in allowed:
+    if normalized_snapshot not in allowed:
         return {
             "error": "Snapshot name must be PRE_DEPLOY, PRE_TEST or PRE_IMPORT"
         }
 
-    return simulate_backup(snapshot_name)
+    return run_real_backup_process(
+        BackupRunRequest(
+            backup_type=normalized_snapshot,
+            target="ALL"
+        )
+    )
 
 
 @router.post("/simulate-disaster")
@@ -328,10 +461,6 @@ def restore_backup():
             detail="AWS_BUCKET no está configurado en el archivo .env"
         )
 
-    prefix = normalize_s3_prefix(
-        os.getenv("AWS_BACKUP_PREFIX", "")
-    )
-
     restore_folder = os.getenv(
         "RESTORE_FOLDER",
         "restores"
@@ -352,7 +481,7 @@ def restore_backup():
         if not latest_backup:
             raise HTTPException(
                 status_code=404,
-                detail="No se encontraron backups .bak en el bucket de AWS S3"
+                detail="No se encontraron backups físicos en el bucket de AWS S3"
             )
 
         object_key = latest_backup["Key"]

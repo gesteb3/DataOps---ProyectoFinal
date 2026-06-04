@@ -14,6 +14,8 @@ BACKUP_TYPE_TO_S3_FOLDER = {
     "PRE_IMPORT": "pre_import",
 }
 
+ALLOWED_BACKUP_EXTENSIONS = (".bak", ".dump", ".dmp", ".zip", ".tar", ".gz", ".log")
+
 
 def normalize_s3_prefix(prefix: str | None) -> str:
     if not prefix:
@@ -167,11 +169,12 @@ def find_latest_backup_in_s3() -> dict[str, Any] | None:
 
             relative_key = key.removeprefix(base_prefix)
             folder = relative_key.split("/", 1)[0]
+            suffix = Path(relative_key).suffix.lower()
 
             if folder not in allowed_folders:
                 continue
 
-            if not relative_key.lower().endswith(".bak"):
+            if suffix not in ALLOWED_BACKUP_EXTENSIONS:
                 continue
 
             if latest_object is None or obj["LastModified"] > latest_object["LastModified"]:

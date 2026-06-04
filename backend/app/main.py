@@ -183,7 +183,7 @@ def create_connection(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
-                    "message": "No se registró la conexión porque la prueba real falló.",
+                    "message": "No se registró la conexión porque la prueba falló.",
                     "connection_test": connection_test
                 }
             )
@@ -313,7 +313,8 @@ def get_connection_databases(
 
     connections = query.order_by(
         Connection.motor.asc(),
-        Connection.database_name.asc()
+        Connection.database_name.asc(),
+        Connection.nombre.asc()
     ).all()
 
     return [

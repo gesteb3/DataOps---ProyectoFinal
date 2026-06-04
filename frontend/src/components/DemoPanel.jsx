@@ -358,7 +358,7 @@ function DemoPanel({ open, onClose, onAfterRun }) {
 
     await executeRequest({
       key: "connection-form-test",
-      label: "Probar conexión real",
+      label: "Probar conexión",
       method: "POST",
       path: "/connections/test",
       data: payload
@@ -371,7 +371,7 @@ function DemoPanel({ open, onClose, onAfterRun }) {
 
     const result = await executeRequest({
       key: "connection-form-register",
-      label: "Registrar nueva conexión real",
+      label: "Registrar nueva conexión",
       method: "POST",
       path: "/connections?validate_connection=true",
       data: payload
@@ -439,7 +439,7 @@ function DemoPanel({ open, onClose, onAfterRun }) {
 
         <div className="demo-panel-body">
           <section className="demo-panel-section">
-            <h3>Conexiones reales</h3>
+            <h3>Conexiones registradas</h3>
 
             <div className="connection-toolbar">
               <button
@@ -595,7 +595,7 @@ function DemoPanel({ open, onClose, onAfterRun }) {
           <section className="connection-modal" aria-label="Formulario para registrar nueva conexión">
             <header className="connection-modal-header">
               <div>
-                <span>Registro real de motor</span>
+                <span>Registro de motor</span>
                 <h3>Registrar Nueva Conexión</h3>
                 <p>Primero se prueba la conexión real. Solo se guarda si responde correctamente.</p>
               </div>
@@ -674,7 +674,7 @@ function DemoPanel({ open, onClose, onAfterRun }) {
                   type="password"
                   value={connectionForm.password}
                   onChange={(event) => handleConnectionField("password", event.target.value)}
-                  placeholder="Contraseña real del motor"
+                  placeholder="Contraseña del motor"
                 />
               </label>
             </div>
