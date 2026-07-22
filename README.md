@@ -599,3 +599,8 @@ El backend protege las rutas principales mediante JWT.
 El frontend conserva el token en `localStorage` y lo envía automáticamente en las peticiones protegidas.
 
 Las credenciales de conexión de motores no deben almacenarse en texto plano.
+
+##Anexos
+<img width="1919" height="845" alt="image" src="https://github.com/user-attachments/assets/35fde5ec-1df6-4524-9396-beb08ed4a18b" />
+
+<img width="1276" height="714" alt="image" src="https://github.com/user-attachments/assets/51d8e487-591e-4b99-b4bc-d011234a4e82" />
